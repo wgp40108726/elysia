@@ -36,15 +36,13 @@ STORE_DRIVER=postgres
 
 ## PostgreSQL（Drizzle + Neon）
 
-若要進入 V8 的資料庫升級流程，可在 `.env` 中設定：
+若要啟用 PostgreSQL，可在 `.env` 中設定：
 
 ```env
 DATABASE_URL=你的_neon_pooled_url
 DATABASE_URL_MIGRATION=你的_neon_direct_url
 STORE_DRIVER=postgres
 ```
-
-V8 分支建議明確使用：
 
 - `STORE_DRIVER=postgres`：走 PostgreSQL / Drizzle
 - `STORE_DRIVER=json`：回退到 JSON store
@@ -92,6 +90,64 @@ bun run dev:frontend
 bun run dev:backend
 ```
 
+### 常見混淆（請先看這段）
+
+1. `bun run dev` 時，前端主入口是 `http://localhost:5173`，不是 `http://localhost:3000`。
+2. `http://localhost:3000` 在開發階段主要是 API 服務（例如 `/api/menu`、`/health`）。
+3. 只有在前端 build 產物存在（`public/index.html`）時，`3000` 才會同時提供前端頁面。
+4. 若你想直接用 `http://localhost:3000` 看完整網站，先執行：
+
+```bash
+bun run build:frontend
+```
+
+然後再啟動 backend（`bun run dev:backend` 或 `bun run start`）。
+
+### 常見故障排查（本次實戰紀錄）
+
+1. 症狀：`ENOENT: ./public/index.html` 或 `ENOENT: .../public`
+
+- 常見原因：
+  - 在「沒有 `public/` 的目錄」啟動 backend（例如舊 worktree）。
+  - 尚未執行 `bun run build:frontend`，整合模式缺少前端產物。
+- 解法：
+  - 確認目前工作目錄是專案主目錄（本專案請固定在 `00_demo01`）。
+  - 先執行 `bun run build:frontend`，再啟動 backend。
+
+2. 症狀：前端顯示「加入購物車失敗」，但看起來 API 又偶爾正常
+
+- 常見原因：
+  - 3000 同時被多個舊 backend 行程佔用，請求被不同版本程式接到。
+- 解法：
+  - 先清掉舊行程，只保留一個 backend：
+
+```bash
+fuser -k 3000/tcp || true
+pkill -f "bun backend.ts" || true
+pkill -f "bun run dev" || true
+```
+
+    - 再於正確目錄啟動：
+
+```bash
+bun --watch backend.ts
+```
+
+3. 症狀：終端顯示 `exit code 137` / `143` 或 `Terminated`
+
+- 說明：
+  - 這通常代表行程被外部中止（例如手動 kill、終端回收），不等於業務 API 邏輯錯誤。
+- 解法：
+  - 重新確認只有一個 backend 監聽 3000，並重跑最小 smoke test：
+
+```bash
+curl -s http://localhost:3000/health
+curl -s -X POST http://localhost:3000/api/auth/login \
+	-H "Content-Type: application/json" \
+	-d '{"email":"demo@example.com","password":"1234"}'
+curl -s "http://localhost:3000/api/orders/current?userId=0001"
+```
+
 ## 建置
 
 ```bash
@@ -120,37 +176,7 @@ bun run build
 - Web App：`http://localhost:3000`
 - API：`http://localhost:3000/api/*`
 
-## Render 部署（舊 V8 namespace 改造版）
-
-若要在 Render 部署「舊 V8 namespace 改造版」，請確認啟動入口是 `backend.v8.ts`，而不是預設 `backend.ts`。
-
-建議設定：
-
-1. Build Command
-
-```bash
-bun install && bun run build
-```
-
-2. Start Command（最小可行）
-
-```bash
-bun backend.v8.ts
-```
-
-3. Start Command（較保險，會先建立 namespace 資料表）
-
-```bash
-bun run v8:db:setup && bun backend.v8.ts
-```
-
-4. Environment Variables
-
-- `DATABASE_URL`：沿用既有連線設定
-- `PORT`：由 Render 自動注入
-- `V8_DB_SCHEMA`：可不設定（預設 `v8_legacy`），建議明確設為 `v8_legacy`
-
-補充：若 Render 仍使用 `bun run start`（對應 `dist/backend.js`），實際會跑 `backend.ts`，不會進入舊 V8 改造入口。
+補充：若尚未 build 前端，`3000` 仍可正常提供 API，但首頁不一定有前端畫面。
 
 ## 前端獨立部署
 
