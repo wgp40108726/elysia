@@ -145,11 +145,6 @@ V7 沒有資料庫，因此不需要設定 `DATABASE_URL`。
 | `NODE_ENV`           | `production`                                      |
 | `API_ALLOWED_ORIGIN` | 初期可先留空；若前後端分站部署，再填部署後實際前端網址 |
 
-重要提醒：
-
-- 只把內容貼進 Render 的環境變數欄位還不夠，必須再按一次 `Save`，設定才會真的存下來
-- 若沒有按 `Save` 就離開頁面，後續部署仍會使用舊設定或空值
-
 #### 步驟 4：建立服務並等待首次部署
 
 點擊 **Create Web Service** 後，Render 會依序執行：

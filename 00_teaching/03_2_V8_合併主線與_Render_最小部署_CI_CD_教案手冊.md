@@ -258,7 +258,6 @@ V8 的任務不是重來一次，而是看清楚哪裡和 V7 不同。
 - 目的不是立刻部署，而是先把 V8 所需設定準備好
 - 等下面真的 merge 到 `main` 時，再讓 Render 用正確設定自動部署
 - 其中 `STORE_DRIVER=postgres` 不能漏，否則 runtime 仍可能 fallback 回 JSON store
-- 不論是逐筆新增還是 `Add from .env` 貼上內容，最後都一定要按 `Save`；只貼上但沒存檔，Render 不會真的套用這些環境變數
 
 ---
 
