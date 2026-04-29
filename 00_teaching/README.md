@@ -54,6 +54,9 @@
 15. [04_Elysia + Better Auth + Google provider 實作步驟清單.md](/root/00_nsPrj/01_backEnd/06_elysia/00_demo01/00_teaching/04_Elysia + Better Auth + Google provider 實作步驟清單.md:1)
     當 V8 完成後，再進入 V9 的 auth 升級；完成後也應再補一次本版部署調整。
 
+16. [04*5_V9_BetterAuth*導入建置計畫.md](./04_5_V9_BetterAuth_導入前置確認與實作步驟草案.md)
+    在 feat/v8-clean-drizzle-neon-v2 的地基確認後，V9 導入 Better Auth 的完整建置計畫。包含總導入原則、Phase 0–6 分階段說明（為什麼／做什麼／怎麼做）、三方對齊檢查表、驗收矩陣與 rollback 預案。確認計畫後才進入實作。
+
 ---
 
 ## 2. 補充閱讀
