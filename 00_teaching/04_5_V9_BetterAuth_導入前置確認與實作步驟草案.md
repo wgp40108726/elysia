@@ -1887,6 +1887,57 @@ server-side log 已加入，往後若頻率升高才需要進一步處理。
 > **預計時間**：10–15 分鐘。  
 > **完成後你會得到**：`GOOGLE_CLIENT_ID` 與 `GOOGLE_CLIENT_SECRET` 兩個值。
 
+### 流程總覽（Mermaid）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 使用者
+    participant FE as Frontend (App.tsx)
+    participant BE as Backend (Elysia + Better Auth)
+    participant G as Google OAuth
+    participant DB as Neon DB
+
+    U->>FE: 點「使用 Google 登入」
+    FE->>BE: GET /api/auth/sign-in/social?provider=google&callbackURL=...
+    BE->>G: 302 Redirect (OAuth 授權請求)
+    U->>G: 同意授權 / 選擇帳號
+    G->>BE: GET /api/auth/callback/google?code=...
+    BE->>G: 用 code 換 token
+    G-->>BE: id_token / profile
+    BE->>DB: 建立或更新 user/account/session
+    BE-->>U: Set-Cookie + 302 回首頁
+    U->>FE: 重新載入頁面
+    FE->>BE: GET /api/auth/get-session
+    BE-->>FE: SessionUser
+    FE-->>U: 顯示已登入狀態
+```
+
+```mermaid
+flowchart LR
+    subgraph Browser[瀏覽器端]
+      FE[Frontend\n啟動登入流程]
+    end
+
+    subgraph Server[伺服器端]
+      BE[Better Auth\n驗證 callback、簽發 session]
+      ENV[Server ENV\n保存 client secret]
+      DB[(Neon DB)]
+    end
+
+    subgraph Google[第三方服務]
+      OAUTH[Google OAuth]
+    end
+
+    FE -->|redirect| OAUTH
+    OAUTH -->|callback code| BE
+    BE --> ENV
+    BE --> DB
+```
+
+> 教學重點：前端負責「發起登入」，後端負責「安全落地」。  
+> 第三方登入雖然減少密碼管理責任，但 session 與 callback 安全仍是後端責任。
+
 ---
 
 ### Step 1：建立或選擇 Google Cloud 專案
@@ -2054,6 +2105,18 @@ curl -s http://localhost:3000/api/auth/get-providers 2>/dev/null || echo "（此
 ---
 
 ### Step 9：完整 OAuth 流程驗收清單
+
+```mermaid
+flowchart TD
+  A[點擊 使用 Google 登入] --> B{是否跳轉到 Google 同意頁?}
+  B -- 否 --> E1[檢查 GOOGLE_CLIENT_ID / SECRET 是否有值\n並重啟 server]
+  B -- 是 --> C[選擇帳號並同意]
+  C --> D{是否回到首頁且顯示登入名稱?}
+  D -- 否 --> E2[檢查 redirect URI\n是否為 /api/auth/callback/google]
+  D -- 是 --> F{登出後可再次登入?}
+  F -- 否 --> E3[檢查 session cookie 與 server log]
+  F -- 是 --> G[驗收通過]
+```
 
 | 驗收項目                       | 預期結果                                                     |
 | ------------------------------ | ------------------------------------------------------------ |
