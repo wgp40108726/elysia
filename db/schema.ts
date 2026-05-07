@@ -1,19 +1,34 @@
 import {
   integer,
-  pgTable,
+  pgSchema,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const usersTable = pgTable("users", {
-  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+// PostgreSQL namespace 隔離
+// 透過 PG_SCHEMA 環境變數切換，預設 "public"
+// 新主線 V8 使用 bf_v8（對應 feat/v8-clean-drizzle-neon 分支）
+const appSchema = pgSchema(process.env.PG_SCHEMA ?? "public");
+
+// 對照 shared/contracts.ts：
+//   User { id: string, email, name }  → users（多存 password，不對外暴露）
+//   MenuItem { id, name, price, category, description, image_url }
+//   Order { id, userId: string, total, status, createdAt, submittedAt }
+//   OrderItem { item: MenuItem, qty }  → order_items（反正規化）
+//
+// 關鍵設計原則：userId 型別在 contracts.ts 中定義為 string，
+// DB schema 應該完全遵循這個事實，不做型別轉換。
+// 這樣避免隱性轉換成本，也支援 UUID 等其他 userId 格式。
+
+export const usersTable = appSchema.table("users", {
+  id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   password: text("password").notNull(),
 });
 
-export const menuItemsTable = pgTable("menu_items", {
+export const menuItemsTable = appSchema.table("menu_items", {
   id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
   name: text("name").notNull(),
   price: integer("price").notNull(),
@@ -22,9 +37,9 @@ export const menuItemsTable = pgTable("menu_items", {
   imageUrl: text("image_url").notNull(),
 });
 
-export const ordersTable = pgTable("orders", {
+export const ordersTable = appSchema.table("orders", {
   id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-  userId: integer("user_id")
+  userId: text("user_id")
     .notNull()
     .references(() => usersTable.id),
   total: integer("total").notNull().default(0),
@@ -33,7 +48,7 @@ export const ordersTable = pgTable("orders", {
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
 });
 
-export const orderItemsTable = pgTable(
+export const orderItemsTable = appSchema.table(
   "order_items",
   {
     id: integer("id").primaryKey().generatedByDefaultAsIdentity(),

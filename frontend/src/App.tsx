@@ -4,36 +4,18 @@ import type {
   ApiDataResponse,
   MenuItem,
   Order,
-  User,
+  SessionUser,
 } from "../../shared/contracts.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const USER_STORAGE_KEY = "breakfast.user";
 
-type SafeUser = Omit<User, "password">;
-
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
 }
 
-function normalizeUserId(rawId: unknown): string | null {
-  if (typeof rawId === "string" && rawId.trim() !== "") {
-    const trimmed = rawId.trim();
-    if (/^\d+$/.test(trimmed)) {
-      return trimmed.padStart(4, "0");
-    }
-    return trimmed;
-  }
-
-  if (typeof rawId === "number" && Number.isInteger(rawId) && rawId > 0) {
-    return String(rawId).padStart(4, "0");
-  }
-
-  return null;
-}
-
 export default function App() {
-  const [user, setUser] = useState<SafeUser | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [emailInput, setEmailInput] = useState("demo@example.com");
   const [passwordInput, setPasswordInput] = useState("1234");
   const [authError, setAuthError] = useState("");
@@ -127,18 +109,16 @@ export default function App() {
     const savedUser = window.localStorage.getItem(USER_STORAGE_KEY);
     if (savedUser) {
       try {
-        const parsedUser = JSON.parse(savedUser) as Partial<SafeUser>;
-        const normalizedUserId = normalizeUserId(parsedUser.id);
+        const parsed = JSON.parse(savedUser) as SessionUser;
         if (
-          normalizedUserId &&
-          typeof parsedUser.email === "string" &&
-          typeof parsedUser.name === "string"
+          typeof parsed?.id === "string" &&
+          parsed.id.trim() !== "" &&
+          typeof parsed?.email === "string" &&
+          typeof parsed?.name === "string"
         ) {
-          setUser({
-            id: normalizedUserId,
-            email: parsedUser.email,
-            name: parsedUser.name,
-          });
+          setUser(parsed);
+        } else {
+          window.localStorage.removeItem(USER_STORAGE_KEY);
         }
       } catch {
         window.localStorage.removeItem(USER_STORAGE_KEY);
@@ -295,7 +275,7 @@ export default function App() {
         throw new Error(`Login failed: HTTP ${response.status}`);
       }
 
-      const payload = (await response.json()) as ApiDataResponse<SafeUser>;
+      const payload = (await response.json()) as ApiDataResponse<SessionUser>;
       const loggedInUser = payload?.data;
 
       if (!loggedInUser) {
@@ -332,35 +312,70 @@ export default function App() {
         throw new Error("Please login first");
       }
 
+      const patchOrderItem = async (
+        targetOrderId: number,
+        qty: number,
+      ): Promise<Order> => {
+        const response = await fetch(
+          buildApiUrl(`/api/orders/${targetOrderId}`),
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: user.id,
+              itemId: item.id,
+              qty,
+            }),
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(`Update order failed: HTTP ${response.status}`);
+        }
+
+        const payload = (await response.json()) as ApiDataResponse<Order>;
+        const updatedOrder = payload?.data;
+
+        if (!updatedOrder) {
+          throw new Error("Update order failed: invalid payload");
+        }
+
+        return updatedOrder;
+      };
+
       const targetOrderId = await ensureOrder();
       const currentQty = cartQtyByItemId[item.id] ?? 0;
       const nextQty = currentQty + 1;
 
-      const response = await fetch(
-        buildApiUrl(`/api/orders/${targetOrderId}`),
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: user.id,
-            itemId: item.id,
-            qty: nextQty,
-          }),
-        },
-      );
+      try {
+        const updatedOrder = await patchOrderItem(targetOrderId, nextQty);
+        syncCartFromOrder(updatedOrder);
+      } catch (firstTryError) {
+        const firstTryMessage =
+          firstTryError instanceof Error ? firstTryError.message : "";
 
-      if (!response.ok) {
-        throw new Error(`Update order failed: HTTP ${response.status}`);
+        // 換帳號或舊訂單失效時，重新同步目前使用者訂單後再重試一次。
+        if (
+          firstTryMessage.includes("HTTP 403") ||
+          firstTryMessage.includes("HTTP 404")
+        ) {
+          setOrderId(null);
+
+          const recoveredOrder = await loadCurrentOrder(user.id);
+          const retryOrderId = recoveredOrder?.id ?? (await ensureOrder());
+          const recoveredQty =
+            recoveredOrder?.items.find(
+              (orderItem) => orderItem.item.id === item.id,
+            )?.qty ?? 0;
+          const retryQty = recoveredQty + 1;
+
+          const retriedOrder = await patchOrderItem(retryOrderId, retryQty);
+          syncCartFromOrder(retriedOrder);
+          return;
+        }
+
+        throw firstTryError;
       }
-
-      const payload = (await response.json()) as ApiDataResponse<Order>;
-      const updatedOrder = payload?.data;
-
-      if (!updatedOrder) {
-        throw new Error("Update order failed: invalid payload");
-      }
-
-      syncCartFromOrder(updatedOrder);
     } catch (cartError) {
       if (
         cartError instanceof Error &&
