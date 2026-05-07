@@ -8,7 +8,8 @@
  */
 
 import { neonConfig, Pool } from "@neondatabase/serverless";
-import { readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ws from "ws";
 
@@ -41,6 +42,21 @@ interface Journal {
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
+function migrationHash(sqlText: string) {
+  return createHash("sha256").update(sqlText).digest("hex");
+}
+
+function isAlreadyAppliedError(err: unknown) {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  return (
+    err.message.includes("already exists") ||
+    err.message.includes("duplicate_table")
+  );
+}
+
 async function main() {
   const client = await pool.connect();
 
@@ -70,6 +86,17 @@ async function main() {
 
       // 逐步執行每個 statement（以 --> statement-breakpoint 分割）
       const sqlText = await readFile(sqlPath, "utf-8");
+      const hash = migrationHash(sqlText);
+      const applied = await client.query(
+        `select 1 from drizzle."__drizzle_migrations" where hash = $1 limit 1`,
+        [hash],
+      );
+
+      if (applied.rows.length > 0) {
+        console.log(`\n[migration] ${entry.tag} already applied, skipping.`);
+        continue;
+      }
+
       const statements = sqlText
         .split("--> statement-breakpoint")
         .map((s) => s.trim())
@@ -87,14 +114,13 @@ async function main() {
         try {
           await client.query(stmt);
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // 若表/schema 已存在則繼續，其他錯誤則中止
-          if (
-            msg.includes("already exists") ||
-            msg.includes("duplicate_table")
-          ) {
+          if (isAlreadyAppliedError(err)) {
+            const msg = err instanceof Error ? err.message : String(err);
             console.warn(`  [skip] already exists: ${msg.split("\n")[0]}`);
+            await client.query("ROLLBACK");
+            await client.query("BEGIN");
           } else {
+            const msg = err instanceof Error ? err.message : String(err);
             console.error(`  [error] ${msg}`);
             await client.query("ROLLBACK");
             throw err;
@@ -103,6 +129,14 @@ async function main() {
       }
 
       await client.query("COMMIT");
+      await client.query(
+        `insert into drizzle."__drizzle_migrations" (hash, created_at)
+         select $1, $2
+         where not exists (
+           select 1 from drizzle."__drizzle_migrations" where hash = $1
+         )`,
+        [hash, Date.now()],
+      );
       console.log(`  [✓] ${entry.tag} applied`);
     }
 
