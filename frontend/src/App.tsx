@@ -296,12 +296,26 @@ export default function App() {
     setAuthError("");
     setIsGoogleSigningIn(true);
     try {
-      // Better Auth 的 social sign-in 入口：導向後端發起 Google OAuth 流程
-      // callbackURL 決定 OAuth 完成後要回跳的網址（必須是已登記的 redirect URI）
+      // Better Auth 的 social sign-in 入口是 POST。
+      // 先向後端取得導向 Google 同意頁的 URL，再切換瀏覽器位置。
       const callbackURL = window.location.origin;
-      window.location.href = buildApiUrl(
-        `/api/auth/sign-in/social?provider=google&callbackURL=${encodeURIComponent(callbackURL)}`,
-      );
+      const response = await fetch(buildApiUrl("/api/auth/sign-in/social"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ provider: "google", callbackURL }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Google sign-in failed: HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { url?: string };
+      if (!payload?.url) {
+        throw new Error("Google sign-in failed: missing redirect URL");
+      }
+
+      window.location.href = payload.url;
     } catch {
       setAuthError("Google 登入啟動失敗，請稍後再試。");
       setIsGoogleSigningIn(false);
