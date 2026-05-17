@@ -528,3 +528,219 @@ bun dist/backend.js
 
 - **v9-clean-better-auth-v2**：初始 Better Auth 整合（含架構問題）
 - **v9-clean-better-auth-v3**：修正靜態檔案處理、CORS、session 注入邏輯，移除 staticPlugin 改用手動路由
+
+---
+
+## V3 完整改進清單與實測效果
+
+### 改進對比表
+
+| 項目 | V2 實作 | V3 實作 | 改進效果 |
+|------|---------|---------|----------|
+| **CORS 處理** | 手動實作 85 行<br/>`app.options("*", ...)` <br/>+ `app.onAfterHandle(...)` | `@elysia/cors` plugin<br/>8 行配置 | ✅ **簡化 77 行代碼**<br/>更易維護 |
+| **認證檢查** | 每個路由重複 12 行：<br/>`const user = await getCurrentUser(request);`<br/>`if (!user) { set.status = 401; return {...} }` | `requireUser()` helper：<br/>`const user = await requireUser(request);`<br/>（1 行） | ✅ **7 個路由共簡化 ~84 行**<br/>錯誤處理統一 |
+| **靜態檔案** | `@elysiajs/static` plugin<br/>配置 `ignorePatterns` | 手動 wildcard 路由<br/>（20 行，完全可控） | ✅ **避免路由衝突**<br/>打包後行為一致 |
+| **Better Auth 路由** | `app.get("/api/auth/*", ...)`<br/>`app.post("/api/auth/*", ...)` | 同 V2（測試證實 `.mount()` 不可用） | ⚠️ 維持原方案 |
+| **pgSchema 預設值** | `"public"` (但環境變數已設 `bf_v9`) | `"bf_v9"` + 檢查防呆 | ✅ **防禦性改進**<br/>避免環境變數缺失時報錯 |
+
+**總計代碼減少**：~160 行（主要來自 CORS 和 requireUser helper）
+
+---
+
+### V3 測試經驗：失敗案例記錄
+
+#### 1. ❌ `.mount()` 無法用於 Better Auth 整合
+
+**嘗試的做法**：
+```typescript
+// ❌ 測試失敗：導致 404
+app.mount("/api/auth", auth.handler);
+```
+
+**測試結果**：
+- `curl http://localhost:3000/api/auth/get-session` 返回 `404 Not Found`
+- 無論 mount 在 `/api/auth` 還是 `/`，都無法正常路由
+
+**失敗原因分析**：
+1. **Better Auth 的 handler 類型**：
+   ```typescript
+   // Better Auth 導出標準的 Fetch API handler
+   handler: (request: Request) => Promise<Response>
+   ```
+
+2. **Elysia `.mount()` 的預期輸入**：
+   - 主要用於掛載另一個 **Elysia instance**
+   - 或實作 WinterCG 標準的 **framework**
+   - 需要處理路徑前綴的剝離和重寫
+
+3. **不相容的原因**：
+   - Better Auth handler 期望接收**完整路徑**（含 `/api/auth` 前綴）
+   - `.mount()` 會剝離前綴後才傳遞給 handler
+   - 導致 Better Auth 無法正確識別路由
+
+**Elysia 官方文檔並無錯誤**：
+- `.mount()` 確實是設計來掛載子應用程式（Elysia instance）
+- 不是通用的 handler 掛載工具
+- Better Auth 官方文檔也沒有建議使用 `.mount()`
+
+**✅ 正確做法**（V2 和 V3 都採用）：
+```typescript
+// 使用 wildcard 路由，將請求轉發給 Better Auth handler
+app.get("/api/auth/*", ({ request }) => auth.handler(request));
+app.post("/api/auth/*", ({ request }) => auth.handler(request));
+
+// 或使用 .all() 處理所有 HTTP 方法
+app.all("/api/auth/*", ({ request }) => auth.handler(request));
+```
+
+---
+
+#### 2. ⚠️ pgSchema 預設值問題的澄清
+
+**原先誤解**：
+- 以為 V2 使用 `"public"` 預設值會導致 Drizzle 錯誤
+
+**實際情況**：
+- **V2 從未遇到此錯誤**，因為 `.env` 已正確設定 `PG_SCHEMA=bf_v9`
+- 代碼中的 `?? "public"` 預設值根本不會被使用
+
+**真正的問題場景**：
+```typescript
+// V2 代碼
+const appSchema = pgSchema(process.env.PG_SCHEMA ?? "public");
+
+// 只有在以下情況才會報錯：
+// 1. .env 檔案不存在或未載入
+// 2. PG_SCHEMA 環境變數未設定
+// 3. 此時才會使用預設值 "public"，觸發 Drizzle 錯誤
+```
+
+**V3 的改進是「防禦性編程」**：
+```typescript
+// V3 改進：更安全的預設值 + 明確的錯誤提示
+const schemaName = process.env.PG_SCHEMA || "bf_v9";
+if (schemaName === "public") {
+  throw new Error(
+    'PG_SCHEMA cannot be "public". Use a custom schema name or leave it unset to use the default "bf_v9".',
+  );
+}
+const appSchema = pgSchema(schemaName);
+```
+
+**結論**：
+- ✅ V2 在正常運作環境下沒有問題
+- ✅ V3 提供更好的容錯能力和錯誤訊息
+- 這是「錦上添花」而非「修正 bug」
+
+---
+
+#### 3. ✅ 成功案例：手動 wildcard 路由取代 staticPlugin
+
+**問題發現過程**：
+1. 使用 `staticPlugin` 配置 `ignorePatterns: [/^\/api\//, /^\/openapi/]`
+2. 測試發現：`curl http://localhost:3000/health` 返回 HTML 而非 JSON
+3. 即使明確排除 API 路徑，打包後仍會被攔截
+
+**根本原因**：
+- `staticPlugin` 的路由註冊順序在打包後可能改變
+- Plugin 內部的 `ignorePatterns` 實作不夠可靠
+- 黑盒行為難以調試
+
+**解決方案**：
+```typescript
+// 完全移除 staticPlugin，改用手動控制
+if (hasPublicAssets) {
+  app.get("*", async ({ request }) => {
+    const pathname = new URL(request.url).pathname;
+
+    // 1. 明確排除 API 路徑
+    if (pathname.startsWith("/api/") || pathname.startsWith("/openapi")) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // 2. 嘗試提供靜態檔案
+    const staticFile = Bun.file(`./public${pathname}`);
+    if (pathname !== "/" && (await staticFile.exists())) {
+      return staticFile;
+    }
+
+    // 3. SPA fallback
+    return Bun.file("./public/index.html");
+  });
+}
+```
+
+**優勢**：
+- ✅ 路由優先級完全可控（API 路由 → wildcard）
+- ✅ 開發模式和打包模式行為一致
+- ✅ 代碼簡潔（20 行 vs plugin 配置）
+- ✅ 易於調試和維護
+
+**完整測試驗證**：
+```bash
+# 開發模式測試
+bun backend.ts &
+curl http://localhost:3000/health        # ✅ {"status":"ok"}
+curl http://localhost:3000/api/menu      # ✅ {"data":[...]}
+curl http://localhost:3000/              # ✅ HTML
+curl http://localhost:3000/assets/*.js   # ✅ JavaScript file
+
+# 打包模式測試
+bun run build:backend
+bun dist/backend.js &
+# 再次測試上述端點，結果完全一致 ✅
+```
+
+---
+
+### 調試技巧記錄
+
+#### 1. 端口衝突排查
+
+**症狀**：修改代碼後，測試結果仍然錯誤
+
+**排查步驟**：
+```bash
+# 檢查端口佔用
+lsof -i :3000
+# 或
+netstat -tlnp | grep 3000
+
+# 強制終止佔用進程
+pkill -9 -f "bun.*backend"
+
+# 重新測試
+bun backend.ts
+```
+
+#### 2. 環境變數檢查
+
+```bash
+# 檢查 .env 是否被載入
+cd /path/to/project
+cat .env | grep PG_SCHEMA
+
+# 測試打包後環境變數讀取
+bun dist/backend.js  # 確認是否正確讀取 .env
+```
+
+#### 3. 路由優先級測試
+
+```bash
+# 測試 API 路由是否被 wildcard 攔截
+curl -v http://localhost:3000/health 2>&1 | grep "Content-Type"
+# 期望：application/json
+# 若看到：text/html，表示被 SPA fallback 攔截
+
+# 測試 Better Auth 路由
+curl -s http://localhost:3000/api/auth/get-session | jq '.'
+# 期望：null 或 session 物件
+# 若看到：{"error":"Not found"}，表示路由未正確設定
+```
+
+---
+
+## 參考資源
