@@ -1,56 +1,30 @@
 import { Elysia } from "elysia";
+import { z } from "zod";
 import { openapi } from "@elysiajs/openapi";
-import { cors } from "@elysia/cors";
+import { staticPlugin } from "@elysiajs/static";
 import { existsSync } from "node:fs";
-import { networkInterfaces } from "node:os";
 import toTaipeiDateTime from "./util.ts";
+import type { Order } from "./shared/contracts.ts";
+import type { OrderResponse } from "./shared/route-schemas.ts";
+import {
+  menuItemSchema,
+  sessionUserSchema,
+  orderItemSchema,
+} from "./shared/contracts.ts";
 import {
   apiErrorResponseSchema,
-  createMenuItemBodySchema,
-  deleteMenuItemParamsSchema,
-  getOrderByIdParamsSchema,
-  healthResponseSchema,
   menuItemResponseSchema,
   menuListResponseSchema,
-  nullableOrderResponseEnvelopeSchema,
   orderListResponseSchema,
   orderResponseEnvelopeSchema,
-  submitOrderParamsSchema,
+  nullableOrderResponseEnvelopeSchema,
+  orderResponseSchema,
+  healthResponseSchema,
   toOrderResponse,
-  updateMenuItemBodySchema,
-  updateMenuItemParamsSchema,
-  updateOrderBodySchema,
-  updateOrderParamsSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
 
-// 從環境變量獲取配置
-const port = parseInt(process.env.PORT || "3000", 10);
-const host = process.env.HOST || "0.0.0.0"; // 改為 0.0.0.0 以支持網路訪問
-const allowedOrigin = process.env.API_ALLOWED_ORIGIN || "*";
-
-// 獲取本機 IP 地址
-function getLocalIP(): string {
-  const interfaces = networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    const iface = interfaces[name];
-    if (iface) {
-      for (const addr of iface) {
-        if (addr.family === "IPv4" && !addr.internal) {
-          return addr.address;
-        }
-      }
-    }
-  }
-  return "localhost";
-}
-const store = createStore({ dataFilePath: "./data/store.json" });
-const hasPublicAssets =
-  existsSync("./public") && existsSync("./public/index.html");
-
-// ─── Auth Helper ──────────────────────────────────────────────────────────────
-// 簡化的 helper 函數，用於保護路由並獲取 user，失敗時拋出 401 錯誤
 async function requireUser(request: Request) {
   const user = await getCurrentUser(request);
   if (!user) {
@@ -62,31 +36,25 @@ async function requireUser(request: Request) {
   return user;
 }
 
+// 從環境變量獲取配置
+const port = parseInt(process.env.PORT || "3000", 10);
+const host = process.env.HOST || "localhost";
+const allowedOrigin = process.env.API_ALLOWED_ORIGIN || "*";
+const store = createStore({ dataFilePath: "./data/store.json" });
+const hasPublicAssets =
+  existsSync("./public") && existsSync("./public/index.html");
+
 const app = new Elysia();
 
-// ─── CORS Plugin ──────────────────────────────────────────────────────────────
-app.use(
-  cors({
-    origin:
-      allowedOrigin === "*" ? "*" : allowedOrigin || "http://localhost:5173",
-    credentials: allowedOrigin !== "*",
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+if (hasPublicAssets) {
+  app.use(
+    staticPlugin({
+      assets: "public",
+      prefix: "",
+    }),
+  );
+}
 
-// ─── Better Auth Routes ───────────────────────────────────────────────────────
-// ⚠️ 注意：不能使用 app.mount("/api/auth", auth.handler)
-// 原因：Better Auth handler 是標準的 fetch handler function，
-//       但 Elysia 的 .mount() 期望的是 Elysia instance 或特定格式的 handler。
-//       測試結果：.mount() 會導致 404 錯誤。
-//
-// ✅ 正確做法：使用 wildcard 路由明確處理 GET 和 POST
-// 必須在其他 API 路由之前定義，確保 Better Auth 路由優先匹配
-app.get("/api/auth/*", ({ request }) => auth.handler(request));
-app.post("/api/auth/*", ({ request }) => auth.handler(request));
-
-// ─── OpenAPI Plugin ───────────────────────────────────────────────────────────
 app.use(
   openapi({
     path: "/openapi",
@@ -94,9 +62,9 @@ app.use(
     documentation: {
       info: {
         title: "Breakfast Demo API",
-        version: "0.2.3",
+        version: "0.2.2",
         description:
-          "Breakfast ordering demo API for teaching route schema, contract-first design, and future database/auth upgrades. V9-clean-better-auth-v3: optimized static handling, CORS plugin, and Better Auth macro integration.",
+          "Breakfast ordering demo API for teaching route schema, contract-first design, and future database/auth upgrades.",
       },
       tags: [
         { name: "auth", description: "Authentication endpoints" },
@@ -113,45 +81,45 @@ app.use(
 );
 
 // 請求記錄中間件
-// ─── Request Logger ───────────────────────────────────────────────────────────
 app.onRequest(({ request }) => {
   console.log(
     `[${toTaipeiDateTime(new Date().toISOString())}] ${request.method} ${new URL(request.url).pathname}`,
   );
 });
 
+app.options(
+  "*",
+  ({ set }) => {
+    set.status = 204;
+    return "";
+  },
+  {
+    detail: {
+      hide: true,
+    },
+  },
+);
+
+app.onAfterHandle(({ request, set }) => {
+  const requestOrigin = request.headers.get("origin");
+
+  if (allowedOrigin === "*") {
+    set.headers["access-control-allow-origin"] = requestOrigin || "*";
+  } else if (requestOrigin === allowedOrigin) {
+    set.headers["access-control-allow-origin"] = allowedOrigin;
+  } else {
+    return;
+  }
+
+  set.headers.vary = "Origin";
+  set.headers["access-control-allow-methods"] = "GET,POST,PATCH,DELETE,OPTIONS";
+  set.headers["access-control-allow-headers"] = "Content-Type, Authorization";
+});
+
 // API 路由
 
-// ─── Sign-out Proxy ───────────────────────────────────────────────────────────
-// Better Auth 的 /api/auth/sign-out 有 CSRF origin 驗證（比對 trustedOrigins）。
-// production 環境若 BETTER_AUTH_URL 設定錯誤（如仍是 localhost），
-// 瀏覽器送出的 Origin（正式網址）不在白名單，導致 sign-out 回 403 但前端不知道，
-// 造成「看似登出，實際 session 仍在」的假登出。
-//
-// 解法：在 Elysia 層加一個 proxy，以 server 信任的 baseURL 當 Origin 轉發給 Better Auth。
-// 安全性：session 識別仍靠 cookie，CSRF bypass 只在 server 端發生，不降低安全性。
-app.post("/api/sign-out", async ({ request }) => {
-  const baBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
-
-  // 複製原始 headers，強制覆寫 origin 為 Better Auth 信任的 baseURL
-  const proxiedHeaders = new Headers(request.headers);
-  proxiedHeaders.set("origin", baBaseUrl);
-
-  const proxiedRequest = new Request(`${baBaseUrl}/api/auth/sign-out`, {
-    method: "POST",
-    headers: proxiedHeaders,
-  });
-
-  const res = await auth.handler(proxiedRequest);
-  if (!res.ok) {
-    const body = await res
-      .clone()
-      .text()
-      .catch(() => "(unreadable)");
-    console.error(`[sign-out proxy] Better Auth returned ${res.status}:`, body);
-  }
-  return res;
-});
+app.get("/api/auth/*", ({ request }) => auth.handler(request));
+app.post("/api/auth/*", ({ request }) => auth.handler(request));
 
 // 菜單路由
 app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
@@ -173,7 +141,13 @@ app.post(
     return { data: newMenuItem };
   },
   {
-    body: createMenuItemBodySchema,
+    body: z.object({
+      name: z.string().min(1),
+      price: z.number().int().min(0),
+      category: z.string().min(1),
+      description: z.string().min(1),
+      image_url: z.string().min(1),
+    }),
     detail: {
       tags: ["menu"],
       summary: "Create a menu item",
@@ -199,8 +173,16 @@ app.patch(
     return { data: menuItem };
   },
   {
-    params: updateMenuItemParamsSchema,
-    body: updateMenuItemBodySchema,
+    params: z.object({
+      id: z.string().regex(/^[0-9]+$/),
+    }),
+    body: z.object({
+      name: z.string().min(1).optional(),
+      price: z.number().int().min(0).optional(),
+      category: z.string().min(1).optional(),
+      description: z.string().min(1).optional(),
+      image_url: z.string().min(1).optional(),
+    }),
     detail: {
       tags: ["menu"],
       summary: "Update a menu item",
@@ -227,7 +209,9 @@ app.delete(
     return { data: removedMenuItem };
   },
   {
-    params: deleteMenuItemParamsSchema,
+    params: z.object({
+      id: z.string().regex(/^[0-9]+$/),
+    }),
     detail: {
       tags: ["menu"],
       summary: "Delete a menu item",
@@ -261,7 +245,7 @@ app.get(
 // 取得使用者目前進行中的訂單
 app.get(
   "/api/orders/current",
-  async ({ request }) => {
+  async ({ request, set }) => {
     const user = await requireUser(request);
     const currentOrder = store.getCurrentOrderByUserId(user.id);
     return { data: currentOrder ? toOrderResponse(currentOrder) : null };
@@ -352,7 +336,9 @@ app.get(
     return { data: toOrderResponse(order) };
   },
   {
-    params: getOrderByIdParamsSchema,
+    params: z.object({
+      id: z.string().regex(/^[0-9]+$/),
+    }),
     detail: {
       tags: ["orders"],
       summary: "Get order by id",
@@ -408,8 +394,13 @@ app.patch(
     return { data: toOrderResponse(result.order) };
   },
   {
-    params: updateOrderParamsSchema,
-    body: updateOrderBodySchema,
+    params: z.object({
+      id: z.string().regex(/^[0-9]+$/),
+    }),
+    body: z.object({
+      itemId: z.number().int().min(1),
+      qty: z.number().min(0),
+    }),
     detail: {
       tags: ["orders"],
       summary: "Update order item quantity",
@@ -462,7 +453,9 @@ app.post(
     return { data: toOrderResponse(result.order) };
   },
   {
-    params: submitOrderParamsSchema,
+    params: z.object({
+      id: z.string().regex(/^[0-9]+$/),
+    }),
     detail: {
       tags: ["orders"],
       summary: "Submit order",
@@ -492,32 +485,29 @@ app.get("/health", () => ({ status: "ok" }), {
   },
 });
 
-// ─── Manual Static File & SPA Fallback ────────────────────────────────────────
-// 完全手動處理靜態檔案和 SPA fallback，避免 staticPlugin 的路由衝突問題
+// SPA fallback，只有在前端 build 產物存在時才提供靜態頁面。
 if (hasPublicAssets) {
-  app.get("*", async ({ request }) => {
-    const pathname = new URL(request.url).pathname;
+  app.get(
+    "*",
+    async ({ request }) => {
+      const pathname = new URL(request.url).pathname;
+      const staticFile = Bun.file(`./public${pathname}`);
 
-    // API 路徑返回 404
-    if (pathname.startsWith("/api/") || pathname.startsWith("/openapi")) {
-      return new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+      if (pathname !== "/" && (await staticFile.exists())) {
+        return staticFile;
+      }
 
-    // 嘗試回傳對應的靜態檔案
-    const staticFile = Bun.file(`./public${pathname}`);
-    if (pathname !== "/" && (await staticFile.exists())) {
-      return staticFile;
-    }
-
-    // SPA fallback: 回傳 index.html
-    return Bun.file("./public/index.html");
-  });
+      return Bun.file("./public/index.html");
+    },
+    {
+      detail: {
+        hide: true,
+      },
+    },
+  );
 }
 
-// 全域錯誤處理
+// 全局錯誤處理
 app.onError(({ error, set, code }) => {
   if (code === "VALIDATION") {
     set.status = 400;
@@ -535,12 +525,15 @@ app.onError(({ error, set, code }) => {
 await store.init();
 
 app.listen(port, () => {
-  const localIP = getLocalIP();
-
-  console.log(`🍳 早餐店 API 運行中...`);
-  console.log(`   Local:   http://localhost:${port}`);
-  console.log(`   Network: http://${localIP}:${port}`);
-  console.log(`📋 菜單 API: /api/menu`);
-  console.log(`📦 訂單 API: /api/orders`);
-  console.log(`💚 健康檢查: /health`);
+  console.log(`🍳 早餐店 API 運行在 http://${host}:${port}`);
+  console.log(`🌐 Web App: http://${host}:${port}`);
+  console.log(`📋 菜單 API: http://${host}:${port}/api/menu`);
+  console.log(`📦 訂單 API: http://${host}:${port}/api/orders`);
+  console.log(`💚 健康檢查: http://${host}:${port}/health`);
+  console.log(`🔐 CORS Origin: ${allowedOrigin}`);
+  if (!hasPublicAssets) {
+    console.log(
+      "⚠️ public/ 不存在，目前只提供 API。若要提供前端頁面，先執行 bun run build:frontend",
+    );
+  }
 });

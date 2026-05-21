@@ -1,195 +1,523 @@
-# 00_demo01
+# 00_demo01 - V9 (Better Auth + Google OAuth)
 
-這個專案採用「開發分離、部署整合」模式：
+聯大資工早餐訂餐系統 - 完整版
 
-- 後端：`backend.ts`，提供 `Elysia` API
-- 前端：`frontend/`，使用 `React + Vite`
-- 共享契約：`shared/contracts.ts`
-- 部署時：前端 build 產物輸出到 `public/`，由 Elysia 直接提供靜態檔案
+## 專案概述
 
-## 安裝
+這是一個完整的全端點餐系統，採用「開發分離、部署整合」架構：
 
-在專案根目錄執行一次即可，`bun workspaces` 會一起安裝 `frontend` 依賴：
+**技術棧**：
+
+- 🔧 後端：Elysia v1.4+ (TypeScript) + Drizzle ORM
+- ⚛️ 前端：React 19 + Vite + DaisyUI
+- 🔐 認證：Better Auth v1.6+ (Google OAuth only)
+- 🗄️ 資料庫：PostgreSQL (Neon Serverless)
+- 📋 API 規格：OpenAPI 3.0 (自動生成 Swagger UI)
+- 🎯 架構模式：三層架構 (contracts → route-schemas → backend)
+
+**特色**：
+
+- ✅ 單一事實來源（Zod schemas）
+- ✅ 前後端型別安全共享
+- ✅ Google OAuth 登入（無密碼管理）
+- ✅ Session-based 認證（HttpOnly cookies）
+- ✅ 完整的訂單流程（購物車 → 送出 → 歷史記錄）
+- ✅ 部署整合模式（單一 Node 運行）
+
+## 快速開始
+
+### 1. 安裝依賴
+
+在專案根目錄執行（會同時安裝 frontend 依賴）：
 
 ```bash
 bun install
 ```
 
-## 環境變數
+### 2. 環境變數設定
 
-先建立環境變數：
+複製環境變數範本：
 
 ```bash
 cp .env.example .env
 ```
 
-可依需要調整：
+編輯 `.env` 並填入必要資訊：
 
 ```env
+# 伺服器設定
 PORT=3000
 HOST=localhost
-API_ALLOWED_ORIGIN=
-DATABASE_URL=
-DATABASE_URL_MIGRATION=
+
+# PostgreSQL 資料庫 (Neon)
+DATABASE_URL=postgresql://user:pass@host-pooler.region.aws.neon.tech/dbname?sslmode=require
+DATABASE_URL_MIGRATION=postgresql://user:pass@host.region.aws.neon.tech/dbname?sslmode=require
 STORE_DRIVER=postgres
+PG_SCHEMA=bf_v9
+
+# Better Auth 設定
+BETTER_AUTH_URL=http://localhost:3000
+BETTER_AUTH_SECRET=你的隨機密鑰_至少32字元
+
+# Google OAuth 2.0
+GOOGLE_CLIENT_ID=你的-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-你的-google-secret
 ```
 
-## PostgreSQL（Drizzle + Neon）
+**環境變數說明**：
 
-若要啟用 PostgreSQL，可在 `.env` 中設定：
+| 變數名稱                 | 說明                                   | 範例                                                                    |
+| ------------------------ | -------------------------------------- | ----------------------------------------------------------------------- |
+| `PORT`                   | 後端監聽埠號                           | `3000`                                                                  |
+| `HOST`                   | 後端監聽位址                           | `localhost` 或 `0.0.0.0`                                                |
+| `DATABASE_URL`           | Neon Pooled Connection（一般查詢用）   | `postgresql://...pooler...`                                             |
+| `DATABASE_URL_MIGRATION` | Neon Direct Connection（migration 用） | `postgresql://...`                                                      |
+| `STORE_DRIVER`           | 資料儲存驅動                           | `postgres`（生產）或 `json`（開發）                                     |
+| `PG_SCHEMA`              | PostgreSQL schema 名稱                 | `bf_v9`（建議不用 `public`）                                            |
+| `BETTER_AUTH_URL`        | Better Auth 基礎 URL                   | 本地：`http://localhost:3000`<br/>生產：`https://your-app.onrender.com` |
+| `BETTER_AUTH_SECRET`     | Better Auth 加密密鑰                   | 至少 32 字元隨機字串                                                    |
+| `GOOGLE_CLIENT_ID`       | Google OAuth Client ID                 | 從 Google Cloud Console 取得                                            |
+| `GOOGLE_CLIENT_SECRET`   | Google OAuth Secret                    | 從 Google Cloud Console 取得                                            |
 
-```env
-DATABASE_URL=你的_neon_pooled_url
-DATABASE_URL_MIGRATION=你的_neon_direct_url
-STORE_DRIVER=postgres
-```
+**如何取得 Google OAuth 憑證**：
 
-- `STORE_DRIVER=postgres`：走 PostgreSQL / Drizzle
-- `STORE_DRIVER=json`：回退到 JSON store
+1. 前往 [Google Cloud Console](https://console.cloud.google.com/)
+2. 建立新專案或選擇現有專案
+3. 啟用「Google+ API」
+4. 建立「OAuth 2.0 用戶端 ID」（應用程式類型：網頁應用程式）
+5. 設定授權重新導向 URI：
+   - 本地開發：`http://localhost:3000/api/auth/callback/google`
+   - 生產環境：`https://your-app.onrender.com/api/auth/callback/google`
+6. 複製 Client ID 和 Client Secret 到 `.env`
 
-可先做連線檢查：
+**如何生成 BETTER_AUTH_SECRET**：
 
 ```bash
-bun run db:check
+# 方法 1：使用 openssl
+openssl rand -hex 32
+
+# 方法 2：使用 Node.js
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# 方法 3：使用 Bun
+bun -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-接著建立 migration 並套用：
+### 3. 資料庫設定
+
+**建立 Neon 資料庫**：
+
+1. 前往 [Neon Console](https://console.neon.tech/)
+2. 建立新專案
+3. 複製 Connection String（需要 Pooled 和 Direct 兩種）
+4. 填入 `.env` 的 `DATABASE_URL` 和 `DATABASE_URL_MIGRATION`
+
+**執行 Database Migration**：
 
 ```bash
+# 生成 migration 檔案（當 schema 變更時）
 bun run db:generate
+
+# 執行 migration（套用到資料庫）
 bun run db:migrate
 ```
 
-若暫時仍要使用 JSON store，可把 `STORE_DRIVER` 改成 `json`。
-
-若要把 `data/store.json` 匯入 PostgreSQL，可執行：
+**快速推送 Schema（開發用）**：
 
 ```bash
-bun run db:migrate-json --reset
+# 直接推送當前 schema 到資料庫（不生成 migration 檔案）
+bun run db:push
 ```
 
-`--reset` 會在開發環境清空既有資料表，再重新匯入 JSON 資料。
+**查看資料庫內容**：
 
-## 開發
+```bash
+# 啟動 Drizzle Studio（視覺化資料庫管理介面）
+bun run db:studio
+# 訪問 https://local.drizzle.studio
+```
 
-同時啟動前後端：
+**清空測試數據**：
+
+```bash
+# 清空所有訂單和用戶數據（保留菜單）
+bun run db:reset
+```
+
+**資料庫 Schema 結構**：
+
+V9 使用獨立的 PostgreSQL schema (`bf_v9`)，包含以下資料表：
+
+| 資料表         | 說明                   | 關鍵欄位                           |
+| -------------- | ---------------------- | ---------------------------------- |
+| `menu_items`   | 菜單資料               | `id`, `name`, `price`, `category`  |
+| `orders`       | 訂單主表               | `id`, `user_id`, `total`, `status` |
+| `order_items`  | 訂單項目               | `order_id`, `item_id`, `qty`       |
+| `user`         | Better Auth 用戶表     | `id`, `email`, `name`              |
+| `session`      | Better Auth 會話表     | `token`, `expires_at`              |
+| `account`      | Better Auth OAuth 連結 | `provider_id`, `user_id`           |
+| `verification` | Better Auth 驗證記錄   | `identifier`, `value`              |
+
+## 開發模式
+
+### 同時啟動前後端（推薦）
 
 ```bash
 bun run dev
 ```
 
-- 前端：`http://localhost:5173`
-- 後端 API：`http://localhost:3000`
-- Vite 會將 `/api` 代理到後端
-- 這個階段仍是前後端分離開發
+- 🔧 後端 API：`http://localhost:3000`
+- ⚛️ 前端開發伺服器：`http://localhost:5173`
+- 🔄 Vite 會自動代理 `/api/*` 到後端
 
-如果只想單獨啟動：
+**開發時請訪問**：`http://localhost:5173`
+
+### 分別啟動
 
 ```bash
+# 只啟動前端
 bun run dev:frontend
+
+# 只啟動後端
 bun run dev:backend
 ```
 
-### 常見混淆（請先看這段）
+### 開發階段常見問題
 
-1. `bun run dev` 時，前端主入口是 `http://localhost:5173`，不是 `http://localhost:3000`。
-2. `http://localhost:3000` 在開發階段主要是 API 服務（例如 `/api/menu`、`/health`）。
-3. 只有在前端 build 產物存在（`public/index.html`）時，`3000` 才會同時提供前端頁面。
-4. 若你想直接用 `http://localhost:3000` 看完整網站，先執行：
+#### Q1: 開發時應該訪問哪個網址？
+
+**A**: 訪問 `http://localhost:5173`（前端開發伺服器）
+
+- ✅ 正確：`http://localhost:5173` → 完整功能 + Hot reload
+- ❌ 錯誤：`http://localhost:3000` → 只有 API，沒有前端畫面
+
+#### Q2: 為什麼 3000 port 沒有前端畫面？
+
+**A**: 因為開發模式下，前端由 Vite 伺服器提供（5173），後端只提供 API。
+
+要在 3000 看到完整網站，需要先 build 前端：
 
 ```bash
 bun run build:frontend
+bun run dev:backend
 ```
 
-然後再啟動 backend（`bun run dev:backend` 或 `bun run start`）。
+然後訪問 `http://localhost:3000`（此時變成整合模式）。
 
-### 常見故障排查（本次實戰紀錄）
+#### Q3: 如何清理舊的 backend 行程？
 
-1. 症狀：`ENOENT: ./public/index.html` 或 `ENOENT: .../public`
-
-- 常見原因：
-  - 在「沒有 `public/` 的目錄」啟動 backend（例如舊 worktree）。
-  - 尚未執行 `bun run build:frontend`，整合模式缺少前端產物。
-- 解法：
-  - 確認目前工作目錄是專案主目錄（本專案請固定在 `00_demo01`）。
-  - 先執行 `bun run build:frontend`，再啟動 backend。
-
-2. 症狀：前端顯示「加入購物車失敗」，但看起來 API 又偶爾正常
-
-- 常見原因：
-  - 3000 同時被多個舊 backend 行程佔用，請求被不同版本程式接到。
-- 解法：
-  - 先清掉舊行程，只保留一個 backend：
+如果遇到 port 衝突或奇怪的行為，執行：
 
 ```bash
+# 清理所有佔用 3000 的行程
 fuser -k 3000/tcp || true
-pkill -f "bun backend.ts" || true
-pkill -f "bun run dev" || true
+
+# 或清理所有 bun backend 行程
+pkill -f "bun.*backend" || true
 ```
 
-    - 再於正確目錄啟動：
+### npm scripts 完整列表
+
+| 指令                       | 說明                          |
+| -------------------------- | ----------------------------- |
+| `bun run dev`              | 並行啟動前後端開發伺服器      |
+| `bun run dev:backend`      | 只啟動後端（watch 模式）      |
+| `bun run dev:frontend`     | 只啟動前端（Vite 開發伺服器） |
+| `bun run build`            | 打包前後端（部署前執行）      |
+| `bun run build:frontend`   | 只打包前端 → `public/`        |
+| `bun run build:backend`    | 只打包後端 → `dist/`          |
+| `bun run start`            | 啟動生產環境（需先 build）    |
+| `bun run preview:frontend` | 預覽前端 build 結果           |
+| `bun run db:generate`      | 生成 migration 檔案           |
+| `bun run db:migrate`       | 執行 migration                |
+| `bun run db:push`          | 快速推送 schema（開發用）     |
+| `bun run db:studio`        | 啟動 Drizzle Studio           |
+| `bun run db:reset`         | 清空測試數據（保留菜單）      |
+
+## 建置與部署
+
+### 本地測試生產版本
 
 ```bash
-bun --watch backend.ts
-```
-
-3. 症狀：終端顯示 `exit code 137` / `143` 或 `Terminated`
-
-- 說明：
-  - 這通常代表行程被外部中止（例如手動 kill、終端回收），不等於業務 API 邏輯錯誤。
-- 解法：
-  - 重新確認只有一個 backend 監聽 3000，並重跑最小 smoke test：
-
-```bash
-curl -s http://localhost:3000/health
-curl -s -X POST http://localhost:3000/api/auth/login \
-	-H "Content-Type: application/json" \
-	-d '{"email":"demo@example.com","password":"1234"}'
-curl -s "http://localhost:3000/api/orders/current?userId=0001"
-```
-
-## 建置
-
-```bash
+# 1. 打包前後端
 bun run build
-```
 
-- 前端輸出：`public/`
-- 後端輸出：`dist/backend.js`
-- 後端會在部署時直接提供 `public/` 內的靜態資產
-- `public/` 目前不追蹤 Git，因此 clone 下來後若要執行整合版，請先跑一次 build
-
-## 執行後端
-
-```bash
+# 2. 啟動生產模式
 bun run start
 ```
 
-若是剛 clone 下來，請先確認已執行：
+訪問 `http://localhost:3000` 查看完整網站。
+
+**build 輸出**：
+
+- 前端：`public/` （靜態檔案，由後端提供）
+- 後端：`dist/backend.js` （打包後的 Node.js 程式）
+
+### 部署到 Render.com
+
+#### 前置準備
+
+1. **推送程式碼到 GitHub**
 
 ```bash
-bun run build
+# 如果在開發分支，先合併到 main
+git checkout main
+git merge feat/v9-clean-better-auth-v2  # 或你的開發分支名稱
+
+# 推送到 GitHub（Render 會監看 main 分支）
+git push origin main
 ```
 
-啟動後，Elysia 會同時提供：
+2. **在 Render.com 建立 Web Service**
 
-- Web App：`http://localhost:3000`
-- API：`http://localhost:3000/api/*`
+- 前往 [Render Dashboard](https://dashboard.render.com/)
+- 點擊「New +」 → 「Web Service」
+- 連結你的 GitHub repository
+- 選擇 branch：`main`
 
-補充：若尚未 build 前端，`3000` 仍可正常提供 API，但首頁不一定有前端畫面。
+#### 部署設定
 
-## 前端獨立部署
+**基本設定**：
 
-若你之後要改成前端獨立部署，建置前請設定：
+| 欄位           | 值                             |
+| -------------- | ------------------------------ |
+| Name           | `bf1042-v9` 或自訂名稱         |
+| Region         | `Singapore` 或最近的區域       |
+| Branch         | `main`                         |
+| Root Directory | 留空（或 `./`）                |
+| Runtime        | `Node`                         |
+| Build Command  | `bun install && bun run build` |
+| Start Command  | `bun run start`                |
+| Instance Type  | `Free` 或 `Starter`            |
+
+**環境變數設定**：
+
+在 Render 的「Environment」頁面新增以下變數：
+
+```env
+# 伺服器設定
+PORT=3000
+HOST=0.0.0.0
+
+# PostgreSQL
+DATABASE_URL=postgresql://user:pass@host-pooler.region.aws.neon.tech/dbname?sslmode=require
+DATABASE_URL_MIGRATION=postgresql://user:pass@host.region.aws.neon.tech/dbname?sslmode=require
+STORE_DRIVER=postgres
+PG_SCHEMA=bf_v9
+
+# Better Auth（❗ 重要：使用正式網址）
+BETTER_AUTH_URL=https://你的app名稱.onrender.com
+BETTER_AUTH_SECRET=你的隨機密鑰_至少32字元
+
+# Google OAuth（❗ 重要：需更新 redirect URI）
+GOOGLE_CLIENT_ID=你的-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-你的-google-secret
+```
+
+**❗ 特別注意**：
+
+1. **BETTER_AUTH_URL** 必須改成正式網址：`https://你的app名稱.onrender.com`
+2. **Google OAuth Redirect URI** 必須新增生產環境網址：
+   - 前往 [Google Cloud Console](https://console.cloud.google.com/)
+   - OAuth 2.0 用戶端 → 編輯
+   - 授權重新導向 URI 新增：`https://你的app名稱.onrender.com/api/auth/callback/google`
+   - 儲存變更
+
+#### 首次部署後的檢查清單
+
+- [ ] 網站可以正常訪問：`https://你的app名稱.onrender.com`
+- [ ] 點擊「使用 Google 登入」會導向 Google 授權頁
+- [ ] Google 授權後能正確回調並顯示已登入狀態
+- [ ] 菜單資料正常顯示
+- [ ] 加入購物車功能正常
+- [ ] 送出訂單功能正常
+- [ ] 訂單歷史可查詢
+
+#### 持續部署（CI/CD）
+
+Render 預設啟用自動部署，當你推送到指定 branch 時會自動觸發部署：
 
 ```bash
-cp frontend/.env.example frontend/.env
+# 修改程式碼
+git add .
+git commit -m "fix: 修正某個功能"
+git push origin main
+
+# Render 會自動偵測並部署
 ```
 
-並依實際 API 位址調整 `VITE_API_BASE_URL`。
+#### 常見部署問題
 
-若後端要接受跨網域請求，可設定：
+##### 問題 1：Google 登入後顯示「redirect_uri_mismatch」
+
+**原因**：Google OAuth 設定中沒有加入生產環境的 redirect URI
+
+**解決**：
+
+1. 前往 Google Cloud Console
+2. 編輯 OAuth 2.0 用戶端
+3. 新增：`https://你的app名稱.onrender.com/api/auth/callback/google`
+
+##### 問題 2：Build 失敗，顯示「command not found: bun」
+
+**原因**：Render 預設使用 npm/yarn，需要安裝 bun
+
+**解決**：修改 Build Command 為：
 
 ```bash
-API_ALLOWED_ORIGIN=https://your-frontend.example.com bun run start
+npm install -g bun && bun install && bun run build
 ```
+
+或在專案根目錄新增 `.node-version` 檔案指定 Node.js 版本。
+
+##### 問題 3：啟動後立即崩潰，顯示「DATABASE_URL is required」
+
+**原因**：環境變數未正確設定
+
+**解決**：
+
+1. 檢查 Render Environment 頁面
+2. 確認所有必要環境變數都已填入
+3. 重新部署
+
+##### 問題 4：Free tier 冷啟動很慢
+
+**說明**：Render Free tier 在閒置 15 分鐘後會進入睡眠，下次訪問需要 30-60 秒喚醒
+
+**解決方案**：
+
+- 升級到 Starter ($7/月) 可避免冷啟動
+- 或使用 cron 服務定時 ping 你的網站
+
+### 其他部署平台
+
+本專案也可部署到：
+
+- **Railway**: 類似 Render，支援 bun runtime
+- **Fly.io**: 適合需要多區域部署
+- **Vercel**: 需要分離前後端部署（前端 Vercel，後端另選）
+- **AWS/GCP/Azure**: 適合大型生產環境
+
+## 專案架構
+
+### 目錄結構
+
+```
+00_demo01/
+├── backend.ts              # Elysia 後端主程式
+├── auth/
+│   ├── better-auth.ts      # Better Auth 設定與 getCurrentUser()
+│   └── user-mapper.ts      # DB User → SessionUser 轉換
+├── db/
+│   ├── client.ts           # Drizzle 客戶端
+│   ├── schema.ts           # 業務資料表定義
+│   └── auth-schema.ts      # Better Auth 資料表定義
+├── shared/
+│   ├── contracts.ts        # 第1事實：業務物件 schemas
+│   └── route-schemas.ts    # 第2事實：API 規格 schemas
+├── store/
+│   └── index.ts            # 業務邏輯層（訂單、菜單管理）
+├── frontend/               # React 前端
+│   ├── src/
+│   │   └── App.tsx         # 前端主程式
+│   ├── dist/               # build 輸出（gitignore）
+│   └── package.json
+├── public/                 # 前端 build 產物（後端靜態資源）
+├── scripts/
+│   ├── reset-database.ts   # 資料庫初始化腳本
+│   └── run-migration.ts    # 手動 migration 執行
+├── drizzle/                # Migration 檔案
+├── .env                    # 環境變數（gitignore）
+└── package.json
+```
+
+### 三層架構設計
+
+V9 採用嚴格的三層架構，確保程式碼可維護性：
+
+```
+┌─────────────────────────────────────┐
+│   shared/contracts.ts               │ ← 第1事實：業務物件
+│   (MenuItem, Order, SessionUser)    │
+└─────────────────────────────────────┘
+              ↓ import
+┌─────────────────────────────────────┐
+│   shared/route-schemas.ts           │ ← 第2事實：API 規格
+│   (CreateOrderBody, OrderResponse)  │
+└─────────────────────────────────────┘
+              ↓ import
+┌─────────────────────────────────────┐
+│   backend.ts                        │ ← 第3層：路由實作
+│   (Elysia routes)                   │
+└─────────────────────────────────────┘
+```
+
+**設計原則**：
+
+- ✅ `backend.ts` 不能有 inline `z.object()`
+- ✅ `backend.ts` 只能 import `route-schemas.ts`
+- ✅ `contracts.ts` 定義業務物件，不包含 API 專用欄位
+- ✅ `route-schemas.ts` 可以擴展 contracts，加入 API 專用欄位
+
+**優點**：
+
+- 更換認證方式時，業務邏輯零修改（實驗證明 ✅）
+- 前後端共享型別定義，保證一致性
+- API 規格集中管理，容易維護
+- 支援自動生成 OpenAPI 文件
+
+詳見教學文件：`00_demo01-docs/00_teaching/02_4_Schema一致性設計_Zod與Drizzle多層架構.md`
+
+## API 文件
+
+### OpenAPI / Swagger UI
+
+啟動後端後訪問：
+
+```
+http://localhost:3000/swagger
+```
+
+自動生成的 API 文件包含：
+
+- 所有端點的 request/response schemas
+- 互動式測試介面
+- 可下載 OpenAPI JSON
+
+### 主要 API 端點
+
+| 端點                       | 方法  | 說明         | 需認證 |
+| -------------------------- | ----- | ------------ | ------ |
+| `/health`                  | GET   | 健康檢查     | ❌     |
+| `/api/auth/sign-in/social` | POST  | Google 登入  | ❌     |
+| `/api/auth/sign-out`       | POST  | 登出         | ✅     |
+| `/api/auth/get-session`    | GET   | 取得當前會話 | ✅     |
+| `/api/menu`                | GET   | 取得菜單     | ❌     |
+| `/api/orders`              | POST  | 建立訂單     | ✅     |
+| `/api/orders/current`      | GET   | 取得當前訂單 | ✅     |
+| `/api/orders/:id`          | PATCH | 更新訂單項目 | ✅     |
+| `/api/orders/:id/submit`   | POST  | 送出訂單     | ✅     |
+| `/api/orders/history`      | GET   | 訂單歷史     | ✅     |
+
+## 學習資源
+
+### 相關講義
+
+專案配套教學文件位於 `00_demo01-docs/00_teaching/`：
+
+- `01_版本閱讀指南.md` - 各版本演進說明
+- `02_4_Schema一致性設計_Zod與Drizzle多層架構.md` - 架構設計理念
+- `03_1_Drizzle+Neon_註冊與升級實作步驟清單.md` - 資料庫設定
+- `03_2_V8_合併主線與_Render_最小部署_CI_CD_教案手冊.md` - 部署教學
+
+### 技術文件連結
+
+- [Elysia 官方文件](https://elysiajs.com/)
+- [Better Auth 官方文件](https://better-auth.com/)
+- [Drizzle ORM 官方文件](https://orm.drizzle.team/)
+- [Neon PostgreSQL 官方文件](https://neon.tech/docs)
+- [React 19 官方文件](https://react.dev/)
+
+## 授權
+
+此專案為教學用途，遵循 MIT License。

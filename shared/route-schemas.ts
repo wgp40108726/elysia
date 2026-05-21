@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Order } from "./contracts.ts";
-import { menuItemSchema, orderSchema, sessionUserSchema } from "./contracts.ts";
+import { menuItemSchema, orderSchema } from "./contracts.ts";
 import toTaipeiDateTime from "../util.ts";
 
 export type { Order };
@@ -35,12 +35,6 @@ export function toOrderResponse(order: Order): OrderResponse {
 
 // ─── Request Schemas（按 route 分組）────────────────────────────────────
 
-/** POST /api/auth/login */
-export const loginBodySchema = z.object({
-  email: z.string().min(3),
-  password: z.string().min(1),
-});
-
 /** POST /api/menu */
 export const createMenuItemBodySchema = z.object({
   name: z.string().min(1),
@@ -68,28 +62,9 @@ export const deleteMenuItemParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
 });
 
-/** GET /api/orders/current */
-export const getOrderCurrentQuerySchema = z.object({
-  userId: z.string().min(1),
-});
-
-/** GET /api/orders/history */
-export const getOrderHistoryQuerySchema = z.object({
-  userId: z.string().min(1),
-});
-
-/** POST /api/orders */
-export const createOrderBodySchema = z.object({
-  userId: z.string().min(1),
-});
-
 /** GET /api/orders/:id */
 export const getOrderByIdParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
-});
-
-export const getOrderByIdQuerySchema = z.object({
-  userId: z.string().min(1),
 });
 
 /** PATCH /api/orders/:id */
@@ -98,7 +73,6 @@ export const updateOrderParamsSchema = z.object({
 });
 
 export const updateOrderBodySchema = z.object({
-  userId: z.string().min(1),
   itemId: z.number().int().min(1),
   qty: z.number().min(0),
 });
@@ -108,15 +82,7 @@ export const submitOrderParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
 });
 
-export const submitOrderBodySchema = z.object({
-  userId: z.string().min(1),
-});
-
 // ─── Response Schemas（API envelope 層）─────────────────────────────────
-
-export const loginResponseSchema = z.object({
-  data: sessionUserSchema,
-});
 
 export const menuListResponseSchema = z.object({
   data: z.array(menuItemSchema),
