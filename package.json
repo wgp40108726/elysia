@@ -16,7 +16,7 @@
     "start": "bun dist/backend.js",
     "preview:frontend": "cd frontend && bun run preview",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "bun scripts/run-migration.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:reset": "bun scripts/reset-database.ts"
