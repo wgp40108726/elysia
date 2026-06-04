@@ -67,6 +67,10 @@ content-type: application/json
   "roles": ["customer", "staff", "admin"]
 }
 
+### V10 RBAC: 刪除使用者單一角色 admin only
+DELETE {{url}}/api/users/{{targetUserId}}/roles/staff
+Cookie: {{authCookie}}
+
 ### 菜單：公開查看
 GET {{url}}/api/menu
 

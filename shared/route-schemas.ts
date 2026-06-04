@@ -128,6 +128,12 @@ export const updateUserRolesBodySchema = z.object({
   roles: z.array(roleSchema).min(1),
 });
 
+/** DELETE /api/users/:id/roles/:role */
+export const deleteUserRoleParamsSchema = z.object({
+  id: z.string().min(1),
+  role: roleSchema,
+});
+
 // ─── Response Schemas（API envelope 層）─────────────────────────────────
 
 export const currentUserResponseSchema = z.object({

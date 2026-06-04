@@ -184,6 +184,27 @@ export class PgStore implements Store {
     return normalizedRoles;
   }
 
+  async deleteUserRole(userId: string, role: Role): Promise<Role[]> {
+    await db
+      .delete(userRolesTable)
+      .where(and(eq(userRolesTable.userId, userId), eq(userRolesTable.role, role)));
+
+    const nextRoles = this
+      .getUserRoles(userId)
+      .filter((currentRole) => currentRole !== role);
+    const normalizedRoles = normalizeRoles(nextRoles);
+
+    if (normalizedRoles.includes("customer") && nextRoles.length === 0) {
+      await db
+        .insert(userRolesTable)
+        .values({ userId, role: "customer" })
+        .onConflictDoNothing();
+    }
+
+    this.userRoles.set(userId, normalizedRoles);
+    return normalizedRoles;
+  }
+
   async createRoleRequest(input: {
     user: CurrentUser;
     requestedRole: InternalRole;

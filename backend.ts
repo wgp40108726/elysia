@@ -9,6 +9,7 @@ import {
   createRoleRequestBodySchema,
   createMenuItemBodySchema,
   currentUserResponseSchema,
+  deleteUserRoleParamsSchema,
   deleteMenuItemParamsSchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
@@ -331,6 +332,34 @@ app.patch(
       tags: ["auth"],
       summary: "Update user roles",
       description: "Directly replace a user's RBAC roles. Admin only.",
+    },
+    response: {
+      200: userRolesResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.delete(
+  "/api/users/:id/roles/:role",
+  async ({ params, request }) => {
+    await requireAnyRole(request, store, ["admin"]);
+    const input = deleteUserRoleParamsSchema.parse(params);
+    const roles = await store.deleteUserRole(input.id, input.role);
+    return {
+      data: {
+        userId: input.id,
+        roles,
+      },
+    };
+  },
+  {
+    params: deleteUserRoleParamsSchema,
+    detail: {
+      tags: ["auth"],
+      summary: "Delete one user role",
+      description: "Remove a single role from a user. Admin only.",
     },
     response: {
       200: userRolesResponseSchema,

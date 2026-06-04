@@ -352,6 +352,14 @@ export class JsonFileStore implements Store {
     return normalizedRoles;
   }
 
+  async deleteUserRole(userId: string, role: Role): Promise<Role[]> {
+    const currentRoles = this.getUserRoles(userId);
+    const nextRoles = currentRoles.filter((currentRole) => currentRole !== role);
+    const normalizedRoles = nextRoles.length > 0 ? nextRoles : ["customer"];
+
+    return this.setUserRoles(userId, normalizedRoles);
+  }
+
   async createRoleRequest(input: {
     user: CurrentUser;
     requestedRole: InternalRole;

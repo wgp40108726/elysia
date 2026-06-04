@@ -47,6 +47,7 @@ export interface Store {
 
   getUserRoles(userId: string): ReadonlyArray<Role>;
   setUserRoles(userId: string, roles: ReadonlyArray<Role>): Promise<Role[]>;
+  deleteUserRole(userId: string, role: Role): Promise<Role[]>;
   createRoleRequest(input: {
     user: CurrentUser;
     requestedRole: InternalRole;

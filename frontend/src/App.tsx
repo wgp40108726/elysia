@@ -476,6 +476,40 @@ export default function App() {
     }
   }
 
+  async function deleteTargetUserRole(role: Role): Promise<void> {
+    if (!targetUserId) return;
+
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/users/${targetUserId}/roles/${role}`),
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Delete user role failed: HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<{
+        userId: string;
+        roles: Role[];
+      }>;
+      setTargetRoles(payload.data.roles.join(","));
+      setManagementMessage(`${role} 角色已移除。`);
+      if (targetUserId === user?.id) {
+        await loadCurrentUser();
+      }
+    } catch (roleError) {
+      setActionError("刪除使用者角色失敗。");
+      console.error(roleError);
+    }
+  }
+
   async function updateOrderStatus(
     targetOrderId: number,
     status: Order["status"],
@@ -993,6 +1027,27 @@ export default function App() {
                         }}
                         placeholder="customer,staff,admin"
                       />
+                      <div className="flex flex-wrap gap-2">
+                        {targetRoles
+                          .split(",")
+                          .map((role) => role.trim())
+                          .filter(Boolean)
+                          .map((role) => (
+                            <span key={role} className="badge badge-lg gap-2">
+                              {role}
+                              <button
+                                className="btn btn-ghost btn-xs px-1 min-h-0 h-5"
+                                type="button"
+                                disabled={!targetUserId}
+                                onClick={() => {
+                                  void deleteTargetUserRole(role as Role);
+                                }}
+                              >
+                                x
+                              </button>
+                            </span>
+                          ))}
+                      </div>
                       <button
                         className="btn btn-primary w-full"
                         disabled={!targetUserId}
