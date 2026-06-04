@@ -2,9 +2,12 @@ import { useEffect, useState, useMemo } from "react";
 import "./App.css";
 import type {
   ApiDataResponse,
+  CurrentUser,
+  InternalRole,
   MenuItem,
   Order,
-  SessionUser,
+  Role,
+  RoleRequest,
 } from "../../shared/contracts.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
@@ -14,7 +17,7 @@ function buildApiUrl(path: string) {
 }
 
 export default function App() {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const [user, setUser] = useState<CurrentUser | null>(null);
   const [authError, setAuthError] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -32,6 +35,58 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [roleRequestRole, setRoleRequestRole] =
+    useState<InternalRole>("staff");
+  const [roleRequestReason, setRoleRequestReason] = useState("");
+  const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [managementMessage, setManagementMessage] = useState("");
+  const [targetUserId, setTargetUserId] = useState("");
+  const [targetRoles, setTargetRoles] = useState("customer,staff");
+  const [menuDraft, setMenuDraft] = useState({
+    id: "",
+    name: "",
+    price: "",
+    category: "餐點",
+    description: "",
+    image_url: "/imgs/menu/test-v10.webp",
+  });
+
+  const canManageRoles = Boolean(user?.roles.includes("admin"));
+  const canReviewRequests = Boolean(
+    user?.roles.some((role) => role === "owner" || role === "admin"),
+  );
+  const canManageMenu = canReviewRequests;
+  const canManageOrders = Boolean(
+    user?.roles.some((role) =>
+      ["staff", "chef", "owner", "admin"].includes(role),
+    ),
+  );
+
+  async function loadCurrentUser(): Promise<CurrentUser | null> {
+    const response = await fetch(buildApiUrl("/api/me"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      setUser(null);
+      return null;
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<CurrentUser>;
+    setUser(payload.data);
+    return payload.data;
+  }
+
+  async function loadMenuItems(): Promise<void> {
+    const response = await fetch(buildApiUrl("/api/menu"));
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<MenuItem[]>;
+    setItems(Array.isArray(payload?.data) ? payload.data : []);
+  }
 
   function syncCartFromOrder(order: Order) {
     const nextQtyByItemId = order.items.reduce(
@@ -98,20 +153,51 @@ export default function App() {
     await Promise.all([loadCurrentOrder(), loadOrderHistory()]);
   }
 
+  async function loadRoleRequests(): Promise<void> {
+    if (!canReviewRequests) {
+      setRoleRequests([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl("/api/role-requests"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load role requests failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<RoleRequest[]>;
+    setRoleRequests(Array.isArray(payload?.data) ? payload.data : []);
+  }
+
+  async function loadAllOrders(): Promise<void> {
+    if (!canManageOrders) {
+      setAllOrders([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl("/api/orders"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load all orders failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<Order[]>;
+    setAllOrders(Array.isArray(payload?.data) ? payload.data : []);
+  }
+
   useEffect(() => {
     let mounted = true;
 
-    // V9: 從 Better Auth session cookie 恢復登入狀態（不再用 localStorage）
+    // V10: 從 /api/me 恢復登入狀態與 RBAC roles。
     async function restoreSession() {
       try {
-        const res = await fetch(buildApiUrl("/api/auth/get-session"), {
-          credentials: "include",
-        });
-        if (res.ok) {
-          const data = (await res.json()) as { user?: SessionUser } | null;
-          if (data?.user && mounted) {
-            setUser(data.user);
-          }
+        const currentUser = await loadCurrentUser();
+        if (!mounted || !currentUser) {
+          return;
         }
       } catch {
         // session 無法取得，維持未登入狀態
@@ -121,17 +207,7 @@ export default function App() {
 
     async function loadMenu() {
       try {
-        const response = await fetch(buildApiUrl("/api/menu"));
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const payload = (await response.json()) as ApiDataResponse<MenuItem[]>;
-        const fetchedItems = Array.isArray(payload?.data) ? payload.data : [];
-
-        if (mounted) {
-          setItems(fetchedItems);
-        }
+        await loadMenuItems();
       } catch (fetchError) {
         if (mounted) {
           setError("無法取得菜單資料，請稍後再試。");
@@ -154,16 +230,22 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setHistoryOrders([]);
+      setRoleRequests([]);
+      setAllOrders([]);
       setIsCartOpen(false);
       resetCartState();
       return;
     }
 
-    void refreshUserOrders().catch((refreshError) => {
+    void Promise.all([
+      refreshUserOrders(),
+      loadRoleRequests(),
+      loadAllOrders(),
+    ]).catch((refreshError) => {
       setActionError("載入使用者訂單資料失敗，請稍後再試。");
       console.error(refreshError);
     });
-  }, [user]);
+  }, [user?.id, user?.roles.join(",")]);
 
   const grouped = useMemo(() => {
     const groupedItems = items.reduce(
@@ -304,6 +386,207 @@ export default function App() {
     setAuthError("");
     setActionError("");
     resetCartState();
+  }
+
+  async function submitRoleRequest(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/role-requests"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          requestedRole: roleRequestRole,
+          reason: roleRequestReason,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create role request failed: HTTP ${response.status}`);
+      }
+
+      setRoleRequestReason("");
+      setManagementMessage("角色申請已送出。");
+    } catch (requestError) {
+      setActionError("角色申請送出失敗。");
+      console.error(requestError);
+    }
+  }
+
+  async function reviewRoleRequest(
+    requestId: number,
+    action: "approve" | "reject",
+  ): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/role-requests/${requestId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Review role request failed: HTTP ${response.status}`);
+      }
+
+      await loadRoleRequests();
+      setManagementMessage(action === "approve" ? "已核准申請。" : "已拒絕申請。");
+    } catch (reviewError) {
+      setActionError("角色申請審核失敗。");
+      console.error(reviewError);
+    }
+  }
+
+  async function updateTargetUserRoles(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    const roles = targetRoles
+      .split(",")
+      .map((role) => role.trim())
+      .filter(Boolean) as Role[];
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/users/${targetUserId}/roles`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ roles }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Update user roles failed: HTTP ${response.status}`);
+      }
+
+      setManagementMessage("使用者角色已更新。");
+      if (targetUserId === user?.id) {
+        await loadCurrentUser();
+      }
+    } catch (roleError) {
+      setActionError("更新使用者角色失敗。");
+      console.error(roleError);
+    }
+  }
+
+  async function updateOrderStatus(
+    targetOrderId: number,
+    status: Order["status"],
+  ): Promise<void> {
+    if (status === "pending") return;
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/orders/${targetOrderId}/status`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ status }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Update order status failed: HTTP ${response.status}`);
+      }
+
+      await loadAllOrders();
+      setManagementMessage(`訂單 #${targetOrderId} 狀態已更新。`);
+    } catch (statusError) {
+      setActionError("更新訂單狀態失敗。");
+      console.error(statusError);
+    }
+  }
+
+  async function createMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/menu"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: menuDraft.name,
+          price: Number(menuDraft.price),
+          category: menuDraft.category,
+          description: menuDraft.description,
+          image_url: menuDraft.image_url,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      setManagementMessage("菜單品項已新增。");
+    } catch (menuError) {
+      setActionError("新增菜單失敗。");
+      console.error(menuError);
+    }
+  }
+
+  async function updateMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/menu/${menuDraft.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: menuDraft.name || undefined,
+          price: menuDraft.price ? Number(menuDraft.price) : undefined,
+          category: menuDraft.category || undefined,
+          description: menuDraft.description || undefined,
+          image_url: menuDraft.image_url || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Update menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      setManagementMessage("菜單品項已更新。");
+    } catch (menuError) {
+      setActionError("更新菜單失敗。");
+      console.error(menuError);
+    }
+  }
+
+  async function deleteMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/menu/${menuDraft.id}`), {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Delete menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      setManagementMessage("菜單品項已刪除。");
+    } catch (menuError) {
+      setActionError("刪除菜單失敗。");
+      console.error(menuError);
+    }
   }
 
   async function addToCart(item: MenuItem): Promise<void> {
@@ -507,6 +790,13 @@ export default function App() {
             <div className="badge badge-outline">
               {user ? `已登入 ${user.name}` : "尚未登入"}
             </div>
+            {user
+              ? user.roles.map((role) => (
+                  <div key={role} className="badge badge-neutral">
+                    {role}
+                  </div>
+                ))
+              : null}
             <div className="badge badge-primary">
               {items.length} 個品項・{grouped.categories.length} 類
             </div>
@@ -567,6 +857,332 @@ export default function App() {
           <div className="alert alert-warning mb-4">
             <span>{actionError}</span>
           </div>
+        ) : null}
+
+        {managementMessage ? (
+          <div className="alert alert-success mb-4">
+            <span>{managementMessage}</span>
+          </div>
+        ) : null}
+
+        {user ? (
+          <section className="mb-8 rounded-lg bg-base-100 border border-base-300 p-4">
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="text-xl font-bold">V10 權限管理</h2>
+                  <p className="text-sm opacity-70">{user.email}</p>
+                </div>
+                <button
+                  className="btn btn-sm btn-outline"
+                  onClick={() => {
+                    void Promise.all([
+                      loadCurrentUser(),
+                      loadRoleRequests(),
+                      loadAllOrders(),
+                      loadMenuItems(),
+                    ]);
+                  }}
+                >
+                  重新整理
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div className="rounded-lg bg-base-200 p-4">
+                  <h3 className="font-semibold mb-3">角色申請</h3>
+                  <div className="space-y-3">
+                    <select
+                      className="select select-bordered w-full"
+                      value={roleRequestRole}
+                      onChange={(event) => {
+                        setRoleRequestRole(event.target.value as InternalRole);
+                      }}
+                    >
+                      <option value="staff">staff 櫃台</option>
+                      <option value="chef">chef 廚師</option>
+                      <option value="owner">owner 店長</option>
+                    </select>
+                    <textarea
+                      className="textarea textarea-bordered w-full min-h-24"
+                      value={roleRequestReason}
+                      onChange={(event) => {
+                        setRoleRequestReason(event.target.value);
+                      }}
+                      placeholder="申請原因"
+                    />
+                    <button
+                      className="btn btn-primary w-full"
+                      onClick={() => {
+                        void submitRoleRequest();
+                      }}
+                    >
+                      送出申請
+                    </button>
+                  </div>
+                </div>
+
+                {canReviewRequests ? (
+                  <div className="rounded-lg bg-base-200 p-4">
+                    <h3 className="font-semibold mb-3">申請審核</h3>
+                    {roleRequests.length === 0 ? (
+                      <div className="alert">
+                        <span>目前沒有申請。</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 max-h-80 overflow-auto">
+                        {roleRequests.map((request) => (
+                          <article
+                            key={request.id}
+                            className="rounded-lg bg-base-100 p-3 border border-base-300"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-semibold">
+                                #{request.id} {request.requestedRole}
+                              </p>
+                              <span className="badge">{request.status}</span>
+                            </div>
+                            <p className="text-sm opacity-70 truncate">
+                              {request.userEmail}
+                            </p>
+                            <p className="text-sm mt-2">{request.reason || "-"}</p>
+                            <div className="flex gap-2 mt-3">
+                              <button
+                                className="btn btn-xs btn-success"
+                                disabled={request.status !== "pending"}
+                                onClick={() => {
+                                  void reviewRoleRequest(request.id, "approve");
+                                }}
+                              >
+                                核准
+                              </button>
+                              <button
+                                className="btn btn-xs btn-error btn-outline"
+                                disabled={request.status !== "pending"}
+                                onClick={() => {
+                                  void reviewRoleRequest(request.id, "reject");
+                                }}
+                              >
+                                拒絕
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {canManageRoles ? (
+                  <div className="rounded-lg bg-base-200 p-4">
+                    <h3 className="font-semibold mb-3">使用者角色</h3>
+                    <div className="space-y-3">
+                      <input
+                        className="input input-bordered w-full"
+                        value={targetUserId}
+                        onChange={(event) => {
+                          setTargetUserId(event.target.value);
+                        }}
+                        placeholder="user id"
+                      />
+                      <input
+                        className="input input-bordered w-full"
+                        value={targetRoles}
+                        onChange={(event) => {
+                          setTargetRoles(event.target.value);
+                        }}
+                        placeholder="customer,staff,admin"
+                      />
+                      <button
+                        className="btn btn-primary w-full"
+                        disabled={!targetUserId}
+                        onClick={() => {
+                          void updateTargetUserRoles();
+                        }}
+                      >
+                        更新角色
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {canManageOrders ? (
+                <div className="rounded-lg bg-base-200 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <h3 className="font-semibold">訂單狀態</h3>
+                    <button
+                      className="btn btn-xs btn-outline"
+                      onClick={() => {
+                        void loadAllOrders();
+                      }}
+                    >
+                      更新
+                    </button>
+                  </div>
+                  {allOrders.length === 0 ? (
+                    <div className="alert">
+                      <span>目前沒有訂單。</span>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>狀態</th>
+                            <th>金額</th>
+                            <th>品項</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allOrders.map((order) => (
+                            <tr key={order.id}>
+                              <td>#{order.id}</td>
+                              <td>
+                                <span className="badge badge-outline">
+                                  {order.status}
+                                </span>
+                              </td>
+                              <td>${order.total}</td>
+                              <td>{order.items.length}</td>
+                              <td>
+                                <select
+                                  className="select select-bordered select-xs"
+                                  value={order.status}
+                                  onChange={(event) => {
+                                    void updateOrderStatus(
+                                      order.id,
+                                      event.target.value as Order["status"],
+                                    );
+                                  }}
+                                >
+                                  <option value="submitted">submitted</option>
+                                  <option value="preparing">preparing</option>
+                                  <option value="ready">ready</option>
+                                  <option value="completed">completed</option>
+                                  <option value="cancelled">cancelled</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {canManageMenu ? (
+                <div className="rounded-lg bg-base-200 p-4">
+                  <h3 className="font-semibold mb-3">菜單管理</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.id}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          id: event.target.value,
+                        }));
+                      }}
+                      placeholder="id"
+                    />
+                    <input
+                      className="input input-bordered md:col-span-2"
+                      value={menuDraft.name}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          name: event.target.value,
+                        }));
+                      }}
+                      placeholder="名稱"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.price}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          price: event.target.value,
+                        }));
+                      }}
+                      placeholder="價格"
+                      inputMode="numeric"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.category}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          category: event.target.value,
+                        }));
+                      }}
+                      placeholder="分類"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.image_url}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          image_url: event.target.value,
+                        }));
+                      }}
+                      placeholder="圖片"
+                    />
+                    <textarea
+                      className="textarea textarea-bordered md:col-span-6"
+                      value={menuDraft.description}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          description: event.target.value,
+                        }));
+                      }}
+                      placeholder="描述"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={
+                        !menuDraft.name ||
+                        !menuDraft.price ||
+                        !menuDraft.description
+                      }
+                      onClick={() => {
+                        void createMenuItem();
+                      }}
+                    >
+                      新增
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void updateMenuItem();
+                      }}
+                    >
+                      更新
+                    </button>
+                    <button
+                      className="btn btn-error btn-outline btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void deleteMenuItem();
+                      }}
+                    >
+                      刪除
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
         ) : null}
 
         {items.length === 0 ? (

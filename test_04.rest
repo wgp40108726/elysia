@@ -1,10 +1,12 @@
 @port = 3000
 @url = http://localhost:{{port}}
-@authCookie = better-auth.session_token=PASTE_SESSION_COOKIE_HERE
+@authCookie = better-auth.session_token=04HdbTwpkYtH75VPeMLg1zDgBmW8tOrj.BMTfat3GOoGA7VLQKGqLVs0BmYhrLrTxVojYfgusxM8%3D
+#admintestvalue:04HdbTwpkYtH75VPeMLg1zDgBmW8tOrj.BMTfat3GOoGA7VLQKGqLVs0BmYhrLrTxVojYfgusxM8%3D
+#staffvalue:Bf2RwbRK4ygzsIxUv0bbUuCCf6HwNsVY.kGAzps2Efxq4GVOYdKLyUn9Xpwi8msqpERI%2FUJ%2F2HoE%3D
 @menuId = 1
 @orderId = 1
 @roleRequestId = 1
-@targetUserId = 0002
+@targetUserId = Nk8eQ830EzGzmfiAQJKtOsLHFtOVRCx0
 
 ###
 GET {{url}}/health
@@ -62,7 +64,7 @@ Cookie: {{authCookie}}
 content-type: application/json
 
 {
-  "roles": ["customer", "staff"]
+  "roles": ["customer", "staff", "admin"]
 }
 
 ### 菜單：公開查看
