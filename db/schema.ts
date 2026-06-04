@@ -36,6 +36,37 @@ export const menuItemsTable = appSchema.table("menu_items", {
   imageUrl: text("image_url").notNull(),
 });
 
+export const userRolesTable = appSchema.table(
+  "user_roles",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+  },
+  (table) => ({
+    userRoleUniqueIdx: uniqueIndex("user_roles_user_role_idx").on(
+      table.userId,
+      table.role,
+    ),
+  }),
+);
+
+export const roleRequestsTable = appSchema.table("role_requests", {
+  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  userName: text("user_name").notNull(),
+  userEmail: text("user_email").notNull(),
+  requestedRole: text("requested_role").notNull(),
+  reason: text("reason").notNull().default(""),
+  status: text("status").notNull().default("pending"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+});
+
 export const ordersTable = appSchema.table("orders", {
   id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
   userId: text("user_id")

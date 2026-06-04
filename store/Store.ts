@@ -1,4 +1,12 @@
-import type { MenuItem, Order } from "../shared/contracts.ts";
+import type {
+  CurrentUser,
+  InternalRole,
+  MenuItem,
+  Order,
+  OrderStatus,
+  Role,
+  RoleRequest,
+} from "../shared/contracts.ts";
 
 export type UpdateOrderItemErrorCode =
   | "ORDER_NOT_FOUND"
@@ -11,6 +19,8 @@ export type SubmitOrderErrorCode =
   | "ORDER_NOT_OWNED"
   | "ORDER_NOT_EDITABLE"
   | "EMPTY_ORDER";
+
+export type UpdateOrderStatusErrorCode = "ORDER_NOT_FOUND";
 
 export interface Store {
   init(): Promise<void>;
@@ -35,6 +45,20 @@ export interface Store {
   ): Promise<MenuItem | null>;
   deleteMenuItem(menuId: number): Promise<MenuItem | null>;
 
+  getUserRoles(userId: string): ReadonlyArray<Role>;
+  setUserRoles(userId: string, roles: ReadonlyArray<Role>): Promise<Role[]>;
+  createRoleRequest(input: {
+    user: CurrentUser;
+    requestedRole: InternalRole;
+    reason: string;
+  }): Promise<RoleRequest>;
+  getRoleRequests(): ReadonlyArray<RoleRequest>;
+  getRoleRequestById(requestId: number): RoleRequest | undefined;
+  reviewRoleRequest(
+    requestId: number,
+    input: { action: "approve" | "reject"; reviewer: CurrentUser },
+  ): Promise<RoleRequest | null>;
+
   getOrders(): ReadonlyArray<Order>;
   getCurrentOrderByUserId(userId: string): Order | undefined;
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order>;
@@ -55,5 +79,12 @@ export interface Store {
     input: { userId: string },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: SubmitOrderErrorCode }
+  >;
+  updateOrderStatus(
+    orderId: number,
+    input: { status: Exclude<OrderStatus, "pending"> },
+  ): Promise<
+    | { ok: true; order: Order }
+    | { ok: false; code: UpdateOrderStatusErrorCode }
   >;
 }

@@ -1,5 +1,14 @@
 import { mkdir, rename } from "node:fs/promises";
-import type { MenuItem, Order, OrderItem } from "../../shared/contracts.ts";
+import type {
+  CurrentUser,
+  InternalRole,
+  MenuItem,
+  Order,
+  OrderItem,
+  OrderStatus,
+  Role,
+  RoleRequest,
+} from "../../shared/contracts.ts";
 import type { Store } from "../Store.ts";
 
 interface StoredUser {
@@ -7,15 +16,18 @@ interface StoredUser {
   email: string;
   name: string;
   password: string;
+  roles: Role[];
 }
 
 interface DataStore {
   users: StoredUser[];
   menu: MenuItem[];
   orders: Order[];
+  roleRequests: RoleRequest[];
   userIdCounter: number;
   menuIdCounter: number;
   orderIdCounter: number;
+  roleRequestIdCounter: number;
 }
 
 interface JsonFileStoreOptions {
@@ -100,7 +112,62 @@ function normalizeUser(user: Partial<StoredUser>): StoredUser {
     email: user.email ?? "",
     name: user.name ?? "",
     password: user.password ?? "",
+    roles: normalizeRoles(user.roles),
   };
+}
+
+function normalizeRoles(roles: unknown): Role[] {
+  if (!Array.isArray(roles)) return ["customer"];
+
+  const validRoles = new Set<Role>([
+    "customer",
+    "staff",
+    "chef",
+    "owner",
+    "admin",
+  ]);
+  const normalized = roles.filter((role): role is Role => validRoles.has(role));
+
+  return normalized.length > 0
+    ? [...new Set<Role>(normalized)]
+    : ["customer"];
+}
+
+function normalizeRoleRequest(request: Partial<RoleRequest>): RoleRequest {
+  const requestedRole: InternalRole =
+    request.requestedRole === "staff" ||
+    request.requestedRole === "chef" ||
+    request.requestedRole === "owner"
+      ? request.requestedRole
+      : "staff";
+
+  const status =
+    request.status === "approved" || request.status === "rejected"
+      ? request.status
+      : "pending";
+
+  return {
+    id: request.id ?? 0,
+    userId: request.userId ?? "",
+    userName: request.userName ?? "",
+    userEmail: request.userEmail ?? "",
+    requestedRole,
+    reason: request.reason ?? "",
+    status,
+    reviewedBy: request.reviewedBy,
+    reviewedAt: request.reviewedAt,
+    createdAt: request.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeOrderStatus(status: unknown): OrderStatus {
+  return status === "submitted" ||
+    status === "preparing" ||
+    status === "ready" ||
+    status === "completed" ||
+    status === "cancelled"
+    ? status
+    : "pending";
 }
 
 const defaultUsers: StoredUser[] = [
@@ -109,12 +176,14 @@ const defaultUsers: StoredUser[] = [
     email: "demo@example.com",
     name: "示範使用者",
     password: "1234",
+    roles: ["customer", "admin"],
   },
   {
     id: "0002",
     email: "amy@example.com",
     name: "Amy",
     password: "1234",
+    roles: ["customer"],
   },
 ];
 
@@ -128,9 +197,11 @@ export class JsonFileStore implements Store {
   private users: StoredUser[] = [];
   private menu: MenuItem[] = [];
   private orders: Order[] = [];
+  private roleRequests: RoleRequest[] = [];
   private userIdCounter = 0;
   private menuIdCounter = 0;
   private orderIdCounter = 0;
+  private roleRequestIdCounter = 0;
   private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(options: JsonFileStoreOptions) {
@@ -171,13 +242,16 @@ export class JsonFileStore implements Store {
             ...orderItem,
             item: normalizeMenuItem(orderItem.item),
           })),
-          status: order.status === "submitted" ? "submitted" : "pending",
-          submittedAt:
-            order.status === "submitted" ? order.submittedAt : undefined,
+          status: normalizeOrderStatus(order.status),
+          submittedAt: order.submittedAt,
         })),
+        roleRequests: Array.isArray(parsed.roleRequests)
+          ? parsed.roleRequests.map((request) => normalizeRoleRequest(request))
+          : [],
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
         orderIdCounter: parsed.orderIdCounter ?? 0,
+        roleRequestIdCounter: parsed.roleRequestIdCounter ?? 0,
       });
     } catch (error) {
       console.warn("[store] load failed, fallback to initial store", error);
@@ -249,6 +323,89 @@ export class JsonFileStore implements Store {
     await this.persist();
 
     return removedMenuItem ?? null;
+  }
+
+  getUserRoles(userId: string): ReadonlyArray<Role> {
+    return this.users.find((user) => user.id === userId)?.roles ?? ["customer"];
+  }
+
+  async setUserRoles(
+    userId: string,
+    roles: ReadonlyArray<Role>,
+  ): Promise<Role[]> {
+    const normalizedRoles = normalizeRoles(roles);
+    const user = this.users.find((targetUser) => targetUser.id === userId);
+
+    if (user) {
+      user.roles = normalizedRoles;
+    } else {
+      this.users.push({
+        id: userId,
+        email: "",
+        name: userId,
+        password: "",
+        roles: normalizedRoles,
+      });
+    }
+
+    await this.persist();
+    return normalizedRoles;
+  }
+
+  async createRoleRequest(input: {
+    user: CurrentUser;
+    requestedRole: InternalRole;
+    reason: string;
+  }): Promise<RoleRequest> {
+    const roleRequest: RoleRequest = {
+      id: ++this.roleRequestIdCounter,
+      userId: input.user.id,
+      userName: input.user.name,
+      userEmail: input.user.email,
+      requestedRole: input.requestedRole,
+      reason: input.reason,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+
+    this.roleRequests.push(roleRequest);
+    await this.persist();
+
+    return roleRequest;
+  }
+
+  getRoleRequests(): ReadonlyArray<RoleRequest> {
+    return this.roleRequests;
+  }
+
+  getRoleRequestById(requestId: number): RoleRequest | undefined {
+    return this.roleRequests.find((request) => request.id === requestId);
+  }
+
+  async reviewRoleRequest(
+    requestId: number,
+    input: { action: "approve" | "reject"; reviewer: CurrentUser },
+  ): Promise<RoleRequest | null> {
+    const request = this.roleRequests.find((target) => target.id === requestId);
+    if (!request) return null;
+
+    if (request.status === "pending") {
+      request.status = input.action === "approve" ? "approved" : "rejected";
+      request.reviewedBy = input.reviewer.id;
+      request.reviewedAt = new Date().toISOString();
+
+      if (request.status === "approved") {
+        const currentRoles = this.getUserRoles(request.userId);
+        await this.setUserRoles(request.userId, [
+          ...currentRoles,
+          request.requestedRole,
+        ]);
+      } else {
+        await this.persist();
+      }
+    }
+
+    return request;
   }
 
   getOrders(): ReadonlyArray<Order> {
@@ -399,14 +556,40 @@ export class JsonFileStore implements Store {
     return { ok: true, order };
   }
 
+  async updateOrderStatus(
+    orderId: number,
+    input: { status: Exclude<OrderStatus, "pending"> },
+  ): Promise<
+    | { ok: true; order: Order }
+    | {
+        ok: false;
+        code: "ORDER_NOT_FOUND";
+      }
+  > {
+    const order = this.orders.find((targetOrder) => targetOrder.id === orderId);
+    if (!order) {
+      return { ok: false, code: "ORDER_NOT_FOUND" };
+    }
+
+    order.status = input.status;
+    if (!order.submittedAt) {
+      order.submittedAt = new Date().toISOString();
+    }
+
+    await this.persist();
+    return { ok: true, order };
+  }
+
   private createInitialStore(): DataStore {
     return {
       users: cloneDefaultUsers(),
       menu: cloneDefaultMenu(),
       orders: [],
+      roleRequests: [],
       userIdCounter: defaultUsers.length,
       menuIdCounter: defaultMenu.length,
       orderIdCounter: 0,
+      roleRequestIdCounter: 0,
     };
   }
 
@@ -414,6 +597,7 @@ export class JsonFileStore implements Store {
     this.users = store.users;
     this.menu = store.menu;
     this.orders = store.orders;
+    this.roleRequests = store.roleRequests;
 
     const maxUserId = this.users.reduce((max, user) => {
       const asNumber = Number.parseInt(user.id, 10);
@@ -428,10 +612,18 @@ export class JsonFileStore implements Store {
       (max, order) => Math.max(max, order.id),
       0,
     );
+    const maxRoleRequestId = this.roleRequests.reduce(
+      (max, request) => Math.max(max, request.id),
+      0,
+    );
 
     this.userIdCounter = Math.max(store.userIdCounter || 0, maxUserId);
     this.menuIdCounter = Math.max(store.menuIdCounter || 0, maxMenuId);
     this.orderIdCounter = Math.max(store.orderIdCounter || 0, maxOrderId);
+    this.roleRequestIdCounter = Math.max(
+      store.roleRequestIdCounter || 0,
+      maxRoleRequestId,
+    );
   }
 
   private buildStoreSnapshot(): DataStore {
@@ -439,9 +631,11 @@ export class JsonFileStore implements Store {
       users: this.users,
       menu: this.menu,
       orders: this.orders,
+      roleRequests: this.roleRequests,
       userIdCounter: this.userIdCounter,
       menuIdCounter: this.menuIdCounter,
       orderIdCounter: this.orderIdCounter,
+      roleRequestIdCounter: this.roleRequestIdCounter,
     };
   }
 

@@ -1,10 +1,21 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import type { MenuItem, Order, OrderItem } from "../../shared/contracts.ts";
+import type {
+  CurrentUser,
+  InternalRole,
+  MenuItem,
+  Order,
+  OrderItem,
+  OrderStatus,
+  Role,
+  RoleRequest,
+} from "../../shared/contracts.ts";
 import { db } from "../../db/client.ts";
 import {
   menuItemsTable,
   orderItemsTable,
   ordersTable,
+  roleRequestsTable,
+  userRolesTable,
 } from "../../db/schema.ts";
 import type { Store } from "../Store.ts";
 
@@ -35,6 +46,8 @@ export class PgStore implements Store {
   private readonly dataFilePath: string;
   private menu: MenuItem[] = [];
   private orders: Order[] = [];
+  private userRoles = new Map<string, Role[]>();
+  private roleRequests: RoleRequest[] = [];
 
   constructor(options: PgStoreOptions = {}) {
     this.dataFilePath = options.dataFilePath ?? "./data/store.json";
@@ -147,6 +160,101 @@ export class PgStore implements Store {
     if (idx !== -1) this.menu.splice(idx, 1);
 
     return removedItem;
+  }
+
+  getUserRoles(userId: string): ReadonlyArray<Role> {
+    return this.userRoles.get(userId) ?? ["customer"];
+  }
+
+  async setUserRoles(
+    userId: string,
+    roles: ReadonlyArray<Role>,
+  ): Promise<Role[]> {
+    const normalizedRoles = normalizeRoles(roles);
+
+    await db.delete(userRolesTable).where(eq(userRolesTable.userId, userId));
+    await db.insert(userRolesTable).values(
+      normalizedRoles.map((role) => ({
+        userId,
+        role,
+      })),
+    );
+
+    this.userRoles.set(userId, normalizedRoles);
+    return normalizedRoles;
+  }
+
+  async createRoleRequest(input: {
+    user: CurrentUser;
+    requestedRole: InternalRole;
+    reason: string;
+  }): Promise<RoleRequest> {
+    const [inserted] = await db
+      .insert(roleRequestsTable)
+      .values({
+        userId: input.user.id,
+        userName: input.user.name,
+        userEmail: input.user.email,
+        requestedRole: input.requestedRole,
+        reason: input.reason,
+        status: "pending",
+        createdAt: new Date(),
+      })
+      .returning();
+
+    if (!inserted) throw new Error("Failed to create role request");
+
+    const roleRequest = mapRoleRequestRow(inserted);
+    this.roleRequests.push(roleRequest);
+
+    return roleRequest;
+  }
+
+  getRoleRequests(): ReadonlyArray<RoleRequest> {
+    return this.roleRequests;
+  }
+
+  getRoleRequestById(requestId: number): RoleRequest | undefined {
+    return this.roleRequests.find((request) => request.id === requestId);
+  }
+
+  async reviewRoleRequest(
+    requestId: number,
+    input: { action: "approve" | "reject"; reviewer: CurrentUser },
+  ): Promise<RoleRequest | null> {
+    const [updated] = await db
+      .update(roleRequestsTable)
+      .set({
+        status: input.action === "approve" ? "approved" : "rejected",
+        reviewedBy: input.reviewer.id,
+        reviewedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(roleRequestsTable.id, requestId),
+          eq(roleRequestsTable.status, "pending"),
+        ),
+      )
+      .returning();
+
+    if (!updated) {
+      return this.getRoleRequestById(requestId) ?? null;
+    }
+
+    const roleRequest = mapRoleRequestRow(updated);
+    const existingIndex = this.roleRequests.findIndex(
+      (request) => request.id === roleRequest.id,
+    );
+    if (existingIndex !== -1) this.roleRequests[existingIndex] = roleRequest;
+
+    if (roleRequest.status === "approved") {
+      await this.setUserRoles(roleRequest.userId, [
+        ...this.getUserRoles(roleRequest.userId),
+        roleRequest.requestedRole,
+      ]);
+    }
+
+    return roleRequest;
   }
 
   // ── Orders ──────────────────────────────────────────────────
@@ -319,6 +427,32 @@ export class PgStore implements Store {
     return { ok: true, order };
   }
 
+  async updateOrderStatus(
+    orderId: number,
+    input: { status: Exclude<OrderStatus, "pending"> },
+  ): Promise<
+    | { ok: true; order: Order }
+    | {
+        ok: false;
+        code: "ORDER_NOT_FOUND";
+      }
+  > {
+    const order = this.orders.find((o) => o.id === orderId);
+    if (!order) return { ok: false, code: "ORDER_NOT_FOUND" };
+
+    const submittedAt = order.submittedAt ?? new Date().toISOString();
+
+    await db
+      .update(ordersTable)
+      .set({ status: input.status, submittedAt: new Date(submittedAt) })
+      .where(eq(ordersTable.id, orderId));
+
+    order.status = input.status;
+    order.submittedAt = submittedAt;
+
+    return { ok: true, order };
+  }
+
   // ── Private ─────────────────────────────────────────────────
 
   private async seedFromJsonIfEmpty(): Promise<void> {
@@ -374,6 +508,16 @@ export class PgStore implements Store {
       .from(orderItemsTable)
       .orderBy(asc(orderItemsTable.id));
 
+    const userRoleRows = await db
+      .select()
+      .from(userRolesTable)
+      .orderBy(asc(userRolesTable.userId));
+
+    const roleRequestRows = await db
+      .select()
+      .from(roleRequestsTable)
+      .orderBy(desc(roleRequestsTable.createdAt), desc(roleRequestsTable.id));
+
     this.menu = menuRows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -405,7 +549,7 @@ export class PgStore implements Store {
       userId: row.userId,
       items: itemsByOrderId.get(row.id) ?? [],
       total: row.total,
-      status: row.status === "submitted" ? "submitted" : "pending",
+      status: asOrderStatus(row.status),
       createdAt:
         row.createdAt instanceof Date
           ? row.createdAt.toISOString()
@@ -416,5 +560,64 @@ export class PgStore implements Store {
           : new Date(row.submittedAt).toISOString()
         : undefined,
     }));
+
+    this.userRoles = new Map<string, Role[]>();
+    for (const row of userRoleRows) {
+      const roles = this.userRoles.get(row.userId) ?? [];
+      roles.push(asRole(row.role));
+      this.userRoles.set(row.userId, normalizeRoles(roles));
+    }
+
+    this.roleRequests = roleRequestRows.map((row) => mapRoleRequestRow(row));
   }
+}
+
+function normalizeRoles(roles: ReadonlyArray<Role>): Role[] {
+  const normalized = [...new Set<Role>(roles)];
+  return normalized.length > 0 ? normalized : ["customer"];
+}
+
+function asRole(role: string): Role {
+  return role === "staff" ||
+    role === "chef" ||
+    role === "owner" ||
+    role === "admin"
+    ? role
+    : "customer";
+}
+
+function asInternalRole(role: string): InternalRole {
+  return role === "chef" || role === "owner" ? role : "staff";
+}
+
+function asOrderStatus(status: string): OrderStatus {
+  return status === "submitted" ||
+    status === "preparing" ||
+    status === "ready" ||
+    status === "completed" ||
+    status === "cancelled"
+    ? status
+    : "pending";
+}
+
+function mapRoleRequestRow(
+  row: typeof roleRequestsTable.$inferSelect,
+): RoleRequest {
+  return {
+    id: row.id,
+    userId: row.userId,
+    userName: row.userName,
+    userEmail: row.userEmail,
+    requestedRole: asInternalRole(row.requestedRole),
+    reason: row.reason,
+    status:
+      row.status === "approved" || row.status === "rejected"
+        ? row.status
+        : "pending",
+    reviewedBy: row.reviewedBy ?? undefined,
+    reviewedAt: row.reviewedAt
+      ? new Date(row.reviewedAt).toISOString()
+      : undefined,
+    createdAt: new Date(row.createdAt).toISOString(),
+  };
 }

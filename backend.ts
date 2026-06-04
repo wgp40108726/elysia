@@ -6,7 +6,9 @@ import { networkInterfaces } from "node:os";
 import toTaipeiDateTime from "./util.ts";
 import {
   apiErrorResponseSchema,
+  createRoleRequestBodySchema,
   createMenuItemBodySchema,
+  currentUserResponseSchema,
   deleteMenuItemParamsSchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
@@ -15,15 +17,31 @@ import {
   nullableOrderResponseEnvelopeSchema,
   orderListResponseSchema,
   orderResponseEnvelopeSchema,
+  permissionsResponseSchema,
+  reviewRoleRequestBodySchema,
+  roleRequestListResponseSchema,
+  roleRequestParamsSchema,
+  roleRequestResponseSchema,
   submitOrderParamsSchema,
   toOrderResponse,
   updateMenuItemBodySchema,
   updateMenuItemParamsSchema,
   updateOrderBodySchema,
   updateOrderParamsSchema,
+  updateOrderStatusBodySchema,
+  updateOrderStatusParamsSchema,
+  updateUserRolesBodySchema,
+  updateUserRolesParamsSchema,
+  userRolesResponseSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
-import { auth, getCurrentUser } from "./auth/better-auth.ts";
+import { auth } from "./auth/better-auth.ts";
+import {
+  hasAnyRole,
+  listPermissions,
+  requireAnyRole,
+  requireUser,
+} from "./auth/guards.ts";
 
 // 從環境變量獲取配置
 const port = parseInt(process.env.PORT || "3000", 10);
@@ -49,19 +67,6 @@ const store = createStore({ dataFilePath: "./data/store.json" });
 const hasPublicAssets =
   existsSync("./public") && existsSync("./public/index.html");
 
-// ─── Auth Helper ──────────────────────────────────────────────────────────────
-// 簡化的 helper 函數，用於保護路由並獲取 user，失敗時拋出 401 錯誤
-async function requireUser(request: Request) {
-  const user = await getCurrentUser(request);
-  if (!user) {
-    throw new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-  return user;
-}
-
 const app = new Elysia();
 
 // ─── CORS Plugin ──────────────────────────────────────────────────────────────
@@ -85,6 +90,49 @@ app.use(
 // 必須在其他 API 路由之前定義，確保 Better Auth 路由優先匹配
 app.get("/api/auth/*", ({ request }) => auth.handler(request));
 app.post("/api/auth/*", ({ request }) => auth.handler(request));
+
+app.get(
+  "/api/me",
+  async ({ request }) => {
+    const user = await requireUser(request, store);
+    return { data: user };
+  },
+  {
+    detail: {
+      tags: ["auth"],
+      summary: "Get current user",
+      description: "Return the authenticated user with RBAC roles.",
+    },
+    response: {
+      200: currentUserResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/permissions/me",
+  async ({ request }) => {
+    const user = await requireUser(request, store);
+    return {
+      data: {
+        roles: user.roles,
+        permissions: listPermissions(user.roles),
+      },
+    };
+  },
+  {
+    detail: {
+      tags: ["auth"],
+      summary: "Get current permissions",
+      description: "Return RBAC roles and derived permissions for the user.",
+    },
+    response: {
+      200: permissionsResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
 
 // ─── OpenAPI Plugin ───────────────────────────────────────────────────────────
 app.use(
@@ -153,6 +201,145 @@ app.post("/api/sign-out", async ({ request }) => {
   return res;
 });
 
+// RBAC 路由
+app.post(
+  "/api/role-requests",
+  async ({ body, request, set }) => {
+    const input = createRoleRequestBodySchema.parse(body);
+    const user = await requireUser(request, store);
+    const roleRequest = await store.createRoleRequest({
+      user,
+      requestedRole: input.requestedRole,
+      reason: input.reason,
+    });
+    set.status = 201;
+    return { data: roleRequest };
+  },
+  {
+    body: createRoleRequestBodySchema,
+    detail: {
+      tags: ["auth"],
+      summary: "Create role request",
+      description: "Request an internal staff, chef, or owner role.",
+    },
+    response: {
+      201: roleRequestResponseSchema,
+      401: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/role-requests",
+  async ({ request }) => {
+    await requireAnyRole(request, store, ["owner", "admin"]);
+    return { data: [...store.getRoleRequests()] };
+  },
+  {
+    detail: {
+      tags: ["auth"],
+      summary: "List role requests",
+      description: "Return role requests for owner/admin review.",
+    },
+    response: {
+      200: roleRequestListResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/role-requests/:id",
+  async ({ params, request, set }) => {
+    await requireAnyRole(request, store, ["owner", "admin"]);
+    const roleRequest = store.getRoleRequestById(parseInt(params.id, 10));
+    if (!roleRequest) {
+      set.status = 404;
+      return { error: "Role request not found" };
+    }
+
+    return { data: roleRequest };
+  },
+  {
+    params: roleRequestParamsSchema,
+    detail: {
+      tags: ["auth"],
+      summary: "Get role request",
+      description: "Return one role request for owner/admin review.",
+    },
+    response: {
+      200: roleRequestResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.patch(
+  "/api/role-requests/:id",
+  async ({ params, body, request, set }) => {
+    const input = reviewRoleRequestBodySchema.parse(body);
+    const reviewer = await requireAnyRole(request, store, ["owner", "admin"]);
+    const roleRequest = await store.reviewRoleRequest(parseInt(params.id, 10), {
+      action: input.action,
+      reviewer,
+    });
+
+    if (!roleRequest) {
+      set.status = 404;
+      return { error: "Role request not found" };
+    }
+
+    return { data: roleRequest };
+  },
+  {
+    params: roleRequestParamsSchema,
+    body: reviewRoleRequestBodySchema,
+    detail: {
+      tags: ["auth"],
+      summary: "Review role request",
+      description: "Approve or reject an internal role request.",
+    },
+    response: {
+      200: roleRequestResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.patch(
+  "/api/users/:id/roles",
+  async ({ params, body, request }) => {
+    const input = updateUserRolesBodySchema.parse(body);
+    await requireAnyRole(request, store, ["admin"]);
+    const roles = await store.setUserRoles(params.id, input.roles);
+    return {
+      data: {
+        userId: params.id,
+        roles,
+      },
+    };
+  },
+  {
+    params: updateUserRolesParamsSchema,
+    body: updateUserRolesBodySchema,
+    detail: {
+      tags: ["auth"],
+      summary: "Update user roles",
+      description: "Directly replace a user's RBAC roles. Admin only.",
+    },
+    response: {
+      200: userRolesResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
 // 菜單路由
 app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
   detail: {
@@ -167,8 +354,10 @@ app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
 
 app.post(
   "/api/menu",
-  async ({ body, set }) => {
-    const newMenuItem = await store.createMenuItem(body);
+  async ({ body, request, set }) => {
+    const input = createMenuItemBodySchema.parse(body);
+    await requireAnyRole(request, store, ["owner", "admin"]);
+    const newMenuItem = await store.createMenuItem(input);
     set.status = 201;
     return { data: newMenuItem };
   },
@@ -181,13 +370,16 @@ app.post(
     },
     response: {
       201: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
     },
   },
 );
 
 app.patch(
   "/api/menu/:id",
-  async ({ params, body, set }) => {
+  async ({ params, body, request, set }) => {
+    await requireAnyRole(request, store, ["owner", "admin"]);
     const menuId = parseInt(params.id);
     const menuItem = await store.updateMenuItem(menuId, body);
 
@@ -208,6 +400,8 @@ app.patch(
     },
     response: {
       200: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
     },
   },
@@ -215,7 +409,8 @@ app.patch(
 
 app.delete(
   "/api/menu/:id",
-  async ({ params, set }) => {
+  async ({ params, request, set }) => {
+    await requireAnyRole(request, store, ["owner", "admin"]);
     const menuId = parseInt(params.id);
     const removedMenuItem = await store.deleteMenuItem(menuId);
 
@@ -235,6 +430,8 @@ app.delete(
     },
     response: {
       200: menuItemResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
     },
   },
@@ -243,17 +440,26 @@ app.delete(
 // 訂單列表路由
 app.get(
   "/api/orders",
-  () => ({
-    data: store.getOrders().map(toOrderResponse),
-  }),
+  async ({ request }) => {
+    const user = await requireUser(request, store);
+    const orders = hasAnyRole(user, ["staff", "chef", "owner", "admin"])
+      ? store.getOrders()
+      : store.getOrders().filter((order) => order.userId === user.id);
+
+    return {
+      data: orders.map(toOrderResponse),
+    };
+  },
   {
     detail: {
       tags: ["orders"],
       summary: "List all orders",
-      description: "Return all orders stored in the demo backend.",
+      description:
+        "Return all orders for internal roles, or submitted orders owned by the customer.",
     },
     response: {
       200: orderListResponseSchema,
+      401: apiErrorResponseSchema,
     },
   },
 );
@@ -262,7 +468,7 @@ app.get(
 app.get(
   "/api/orders/current",
   async ({ request }) => {
-    const user = await requireUser(request);
+    const user = await requireUser(request, store);
     const currentOrder = store.getCurrentOrderByUserId(user.id);
     return { data: currentOrder ? toOrderResponse(currentOrder) : null };
   },
@@ -284,7 +490,7 @@ app.get(
 app.get(
   "/api/orders/history",
   async ({ request }) => {
-    const user = await requireUser(request);
+    const user = await requireUser(request, store);
     return {
       data: store.getOrderHistoryByUserId(user.id).map(toOrderResponse),
     };
@@ -306,7 +512,7 @@ app.get(
 app.post(
   "/api/orders",
   async ({ request, set }) => {
-    const user = await requireUser(request);
+    const user = await requireUser(request, store);
     const existingOrder = store.getCurrentOrderByUserId(user.id);
     if (existingOrder) {
       return { data: toOrderResponse(existingOrder) };
@@ -335,7 +541,7 @@ app.post(
 app.get(
   "/api/orders/:id",
   async ({ params, request, set }) => {
-    const user = await requireUser(request);
+    const user = await requireUser(request, store);
     const orderId = parseInt(params.id, 10);
     const order = store.getOrderById(orderId);
 
@@ -344,7 +550,10 @@ app.get(
       return { error: "Order not found" };
     }
 
-    if (order.userId !== user.id) {
+    if (
+      order.userId !== user.id &&
+      !hasAnyRole(user, ["staff", "chef", "owner", "admin"])
+    ) {
       set.status = 403;
       return { error: "Forbidden" };
     }
@@ -372,40 +581,41 @@ app.get(
 app.patch(
   "/api/orders/:id",
   async ({ params, body, request, set }) => {
-    const user = await requireUser(request);
+    const input = updateOrderBodySchema.parse(body);
+    const user = await requireUser(request, store);
     const orderId = parseInt(params.id);
     const result = await store.updateOrderItem(orderId, {
       userId: user.id,
-      itemId: body.itemId,
-      qty: body.qty,
+      itemId: input.itemId,
+      qty: input.qty,
     });
 
-    if (!result.ok && result.code === "ORDER_NOT_FOUND") {
+    if (result.ok) {
+      return { data: toOrderResponse(result.order) };
+    }
+
+    if ("code" in result && result.code === "ORDER_NOT_FOUND") {
       set.status = 404;
       return { error: "Order not found" };
     }
 
-    if (!result.ok && result.code === "MENU_ITEM_NOT_FOUND") {
+    if ("code" in result && result.code === "MENU_ITEM_NOT_FOUND") {
       set.status = 404;
       return { error: "Menu item not found" };
     }
 
-    if (!result.ok && result.code === "ORDER_NOT_OWNED") {
+    if ("code" in result && result.code === "ORDER_NOT_OWNED") {
       set.status = 403;
       return { error: "Forbidden" };
     }
 
-    if (!result.ok && result.code === "ORDER_NOT_EDITABLE") {
+    if ("code" in result && result.code === "ORDER_NOT_EDITABLE") {
       set.status = 409;
       return { error: "Order is not editable" };
     }
 
-    if (!result.ok) {
-      set.status = 500;
-      return { error: "Unexpected store state" };
-    }
-
-    return { data: toOrderResponse(result.order) };
+    set.status = 500;
+    return { error: "Unexpected store state" };
   },
   {
     params: updateOrderParamsSchema,
@@ -430,36 +640,36 @@ app.patch(
 app.post(
   "/api/orders/:id/submit",
   async ({ params, request, set }) => {
-    const user = await requireUser(request);
+    const user = await requireUser(request, store);
     const orderId = parseInt(params.id, 10);
     const result = await store.submitOrder(orderId, { userId: user.id });
 
-    if (!result.ok && result.code === "ORDER_NOT_FOUND") {
+    if (result.ok) {
+      return { data: toOrderResponse(result.order) };
+    }
+
+    if ("code" in result && result.code === "ORDER_NOT_FOUND") {
       set.status = 404;
       return { error: "Order not found" };
     }
 
-    if (!result.ok && result.code === "ORDER_NOT_OWNED") {
+    if ("code" in result && result.code === "ORDER_NOT_OWNED") {
       set.status = 403;
       return { error: "Forbidden" };
     }
 
-    if (!result.ok && result.code === "ORDER_NOT_EDITABLE") {
+    if ("code" in result && result.code === "ORDER_NOT_EDITABLE") {
       set.status = 409;
       return { error: "Order already submitted" };
     }
 
-    if (!result.ok && result.code === "EMPTY_ORDER") {
+    if ("code" in result && result.code === "EMPTY_ORDER") {
       set.status = 400;
       return { error: "Empty order cannot be submitted" };
     }
 
-    if (!result.ok) {
-      set.status = 500;
-      return { error: "Unexpected store state" };
-    }
-
-    return { data: toOrderResponse(result.order) };
+    set.status = 500;
+    return { error: "Unexpected store state" };
   },
   {
     params: submitOrderParamsSchema,
@@ -475,6 +685,48 @@ app.post(
       403: apiErrorResponseSchema,
       404: apiErrorResponseSchema,
       409: apiErrorResponseSchema,
+      500: apiErrorResponseSchema,
+    },
+  },
+);
+
+// 更新訂單狀態
+app.patch(
+  "/api/orders/:id/status",
+  async ({ params, body, request, set }) => {
+    const input = updateOrderStatusBodySchema.parse(body);
+    await requireAnyRole(request, store, ["staff", "chef", "owner", "admin"]);
+    const orderId = parseInt(params.id, 10);
+    const result = await store.updateOrderStatus(orderId, {
+      status: input.status,
+    });
+
+    if (result.ok) {
+      return { data: toOrderResponse(result.order) };
+    }
+
+    if ("code" in result && result.code === "ORDER_NOT_FOUND") {
+      set.status = 404;
+      return { error: "Order not found" };
+    }
+
+    set.status = 500;
+    return { error: "Unexpected store state" };
+  },
+  {
+    params: updateOrderStatusParamsSchema,
+    body: updateOrderStatusBodySchema,
+    detail: {
+      tags: ["orders"],
+      summary: "Update order status",
+      description:
+        "Update kitchen/front-counter order status. Internal roles only.",
+    },
+    response: {
+      200: orderResponseEnvelopeSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
       500: apiErrorResponseSchema,
     },
   },
@@ -519,6 +771,11 @@ if (hasPublicAssets) {
 
 // 全域錯誤處理
 app.onError(({ error, set, code }) => {
+  if (error instanceof Response) {
+    set.status = error.status;
+    return error;
+  }
+
   if (code === "VALIDATION") {
     set.status = 400;
     return {

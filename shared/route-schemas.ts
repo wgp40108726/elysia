@@ -1,6 +1,14 @@
 import { z } from "zod";
 import type { Order } from "./contracts.ts";
-import { menuItemSchema, orderSchema } from "./contracts.ts";
+import {
+  currentUserSchema,
+  internalRoleSchema,
+  menuItemSchema,
+  orderSchema,
+  orderStatusSchema,
+  roleRequestSchema,
+  roleSchema,
+} from "./contracts.ts";
 import toTaipeiDateTime from "../util.ts";
 
 export type { Order };
@@ -62,6 +70,11 @@ export const deleteMenuItemParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
 });
 
+/** GET /api/menu/:id/history */
+export const getMenuHistoryParamsSchema = z.object({
+  id: z.string().regex(/^[0-9]+$/),
+});
+
 /** GET /api/orders/:id */
 export const getOrderByIdParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
@@ -82,7 +95,51 @@ export const submitOrderParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
 });
 
+/** PATCH /api/orders/:id/status */
+export const updateOrderStatusParamsSchema = z.object({
+  id: z.string().regex(/^[0-9]+$/),
+});
+
+export const updateOrderStatusBodySchema = z.object({
+  status: orderStatusSchema.exclude(["pending"]),
+});
+
+/** POST /api/role-requests */
+export const createRoleRequestBodySchema = z.object({
+  requestedRole: internalRoleSchema,
+  reason: z.string().max(500).optional().default(""),
+});
+
+/** GET/PATCH /api/role-requests/:id */
+export const roleRequestParamsSchema = z.object({
+  id: z.string().regex(/^[0-9]+$/),
+});
+
+export const reviewRoleRequestBodySchema = z.object({
+  action: z.enum(["approve", "reject"]),
+});
+
+/** PATCH /api/users/:id/roles */
+export const updateUserRolesParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const updateUserRolesBodySchema = z.object({
+  roles: z.array(roleSchema).min(1),
+});
+
 // ─── Response Schemas（API envelope 層）─────────────────────────────────
+
+export const currentUserResponseSchema = z.object({
+  data: currentUserSchema,
+});
+
+export const permissionsResponseSchema = z.object({
+  data: z.object({
+    roles: z.array(roleSchema),
+    permissions: z.array(z.string()),
+  }),
+});
 
 export const menuListResponseSchema = z.object({
   data: z.array(menuItemSchema),
@@ -90,6 +147,21 @@ export const menuListResponseSchema = z.object({
 
 export const menuItemResponseSchema = z.object({
   data: menuItemSchema,
+});
+
+export const roleRequestResponseSchema = z.object({
+  data: roleRequestSchema,
+});
+
+export const roleRequestListResponseSchema = z.object({
+  data: z.array(roleRequestSchema),
+});
+
+export const userRolesResponseSchema = z.object({
+  data: z.object({
+    userId: z.string().min(1),
+    roles: z.array(roleSchema),
+  }),
 });
 
 export const orderListResponseSchema = z.object({
