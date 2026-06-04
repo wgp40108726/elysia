@@ -1,0 +1,151 @@
+@port = 3000
+@url = http://localhost:{{port}}
+@authCookie = better-auth.session_token=PASTE_SESSION_COOKIE_HERE
+@menuId = 1
+@orderId = 1
+@roleRequestId = 1
+@targetUserId = 0002
+
+###
+GET {{url}}/health
+
+###
+GET {{url}}/openapi/json
+
+### V10 RBAC: 取得目前登入使用者與角色
+GET {{url}}/api/me
+Cookie: {{authCookie}}
+
+### V10 RBAC: 取得目前使用者權限清單
+GET {{url}}/api/permissions/me
+Cookie: {{authCookie}}
+
+### V10 RBAC: 申請內部角色 staff/chef/owner
+POST {{url}}/api/role-requests
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "requestedRole": "staff",
+  "reason": "期末 V10 RBAC 測試：申請櫃台店員角色"
+}
+
+### V10 RBAC: 查看角色申請列表 owner/admin only
+GET {{url}}/api/role-requests
+Cookie: {{authCookie}}
+
+### V10 RBAC: 查看單筆角色申請 owner/admin only
+GET {{url}}/api/role-requests/{{roleRequestId}}
+Cookie: {{authCookie}}
+
+### V10 RBAC: 核准角色申請 owner/admin only
+PATCH {{url}}/api/role-requests/{{roleRequestId}}
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "action": "approve"
+}
+
+### V10 RBAC: 拒絕角色申請 owner/admin only
+PATCH {{url}}/api/role-requests/{{roleRequestId}}
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "action": "reject"
+}
+
+### V10 RBAC: 直接修改使用者角色 admin only
+PATCH {{url}}/api/users/{{targetUserId}}/roles
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "roles": ["customer", "staff"]
+}
+
+### 菜單：公開查看
+GET {{url}}/api/menu
+
+### 菜單：新增菜單 owner/admin only
+POST {{url}}/api/menu
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "name": "V10 測試餐點",
+  "price": 50,
+  "category": "餐點",
+  "description": "用來測試 V10 RBAC 菜單管理權限。",
+  "image_url": "/imgs/menu/test-v10.webp"
+}
+
+### 菜單：修改菜單 owner/admin only
+PATCH {{url}}/api/menu/{{menuId}}
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "price": 55
+}
+
+### 菜單：刪除菜單 owner/admin only
+DELETE {{url}}/api/menu/{{menuId}}
+Cookie: {{authCookie}}
+
+### 訂單：依角色查詢訂單
+GET {{url}}/api/orders
+Cookie: {{authCookie}}
+
+### 訂單：查詢目前購物車
+GET {{url}}/api/orders/current
+Cookie: {{authCookie}}
+
+### 訂單：查詢自己的歷史訂單
+GET {{url}}/api/orders/history
+Cookie: {{authCookie}}
+
+### 訂單：建立或重用目前購物車
+POST {{url}}/api/orders
+Cookie: {{authCookie}}
+
+### 訂單：查詢單筆訂單，自有訂單或內部角色可看
+GET {{url}}/api/orders/{{orderId}}
+Cookie: {{authCookie}}
+
+### 訂單：更新訂單品項，限自己的 pending 訂單
+PATCH {{url}}/api/orders/{{orderId}}
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "itemId": 2,
+  "qty": 3
+}
+
+### 訂單：送出訂單
+POST {{url}}/api/orders/{{orderId}}/submit
+Cookie: {{authCookie}}
+
+### 訂單：更新訂單狀態 staff/chef/owner/admin only
+PATCH {{url}}/api/orders/{{orderId}}/status
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "status": "preparing"
+}
+
+### 訂單：更新訂單狀態為 ready
+PATCH {{url}}/api/orders/{{orderId}}/status
+Cookie: {{authCookie}}
+content-type: application/json
+
+{
+  "status": "ready"
+}
+
+### 登出 proxy
+POST {{url}}/api/sign-out
+Cookie: {{authCookie}}
