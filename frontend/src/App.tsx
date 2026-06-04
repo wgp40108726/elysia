@@ -870,7 +870,7 @@ export default function App() {
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>
-                  <h2 className="text-xl font-bold">V10 權限管理</h2>
+                  <h2 className="text-xl font-bold">權限管理</h2>
                   <p className="text-sm opacity-70">{user.email}</p>
                 </div>
                 <button
