@@ -2,6 +2,7 @@ import type {
   CurrentUser,
   InternalRole,
   MenuItem,
+  MenuItemVersion,
   Order,
   OrderStatus,
   Role,
@@ -26,6 +27,7 @@ export interface Store {
   init(): Promise<void>;
 
   getMenu(): ReadonlyArray<MenuItem>;
+  getMenuItemHistory(menuId: number): ReadonlyArray<MenuItemVersion>;
   createMenuItem(input: {
     name: string;
     price: number;

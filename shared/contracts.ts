@@ -11,6 +11,30 @@ export const menuItemSchema = z.object({
   category: z.string().min(1),
   description: z.string(),
   image_url: z.string().min(1),
+  previousPrice: z.number().min(0).optional(),
+  priceDelta: z.number().optional(),
+  version: z.number().int().min(1).optional(),
+  lastChangedAt: z.string().min(1).optional(),
+});
+
+export const menuItemVersionActionSchema = z.enum([
+  "created",
+  "updated",
+  "deleted",
+]);
+
+export const menuItemVersionSchema = z.object({
+  id: z.number().int().min(1),
+  menuItemId: z.number().int().min(1),
+  version: z.number().int().min(1),
+  action: menuItemVersionActionSchema,
+  snapshot: menuItemSchema.omit({
+    previousPrice: true,
+    priceDelta: true,
+    version: true,
+    lastChangedAt: true,
+  }),
+  changedAt: z.string().min(1),
 });
 
 export const userSchema = z.object({
@@ -88,6 +112,8 @@ export const orderSchema = z.object({
 
 // ─── Derived TypeScript Types（自動推導，永不過時）───────────────────────────
 export type MenuItem = z.infer<typeof menuItemSchema>;
+export type MenuItemVersionAction = z.infer<typeof menuItemVersionActionSchema>;
+export type MenuItemVersion = z.infer<typeof menuItemVersionSchema>;
 export type User = z.infer<typeof userSchema>;
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 export type Role = z.infer<typeof roleSchema>;

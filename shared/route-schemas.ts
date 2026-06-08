@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Order } from "./contracts.ts";
 import {
   currentUserSchema,
+  menuItemVersionSchema,
   internalRoleSchema,
   menuItemSchema,
   orderSchema,
@@ -153,6 +154,10 @@ export const menuListResponseSchema = z.object({
 
 export const menuItemResponseSchema = z.object({
   data: menuItemSchema,
+});
+
+export const menuItemHistoryResponseSchema = z.object({
+  data: z.array(menuItemVersionSchema),
 });
 
 export const roleRequestResponseSchema = z.object({

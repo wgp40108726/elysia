@@ -5,6 +5,7 @@ import type {
   CurrentUser,
   InternalRole,
   MenuItem,
+  MenuItemVersion,
   Order,
   Role,
   RoleRequest,
@@ -40,6 +41,7 @@ export default function App() {
   const [roleRequestReason, setRoleRequestReason] = useState("");
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [menuHistory, setMenuHistory] = useState<MenuItemVersion[]>([]);
   const [managementMessage, setManagementMessage] = useState("");
   const [targetUserId, setTargetUserId] = useState("");
   const [targetRoles, setTargetRoles] = useState("customer,staff");
@@ -187,6 +189,26 @@ export default function App() {
 
     const payload = (await response.json()) as ApiDataResponse<Order[]>;
     setAllOrders(Array.isArray(payload?.data) ? payload.data : []);
+  }
+
+  async function loadMenuItemHistory(menuIdText = menuDraft.id): Promise<void> {
+    if (!menuIdText) {
+      setMenuHistory([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl(`/api/menu/${menuIdText}/history`), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load menu history failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<
+      MenuItemVersion[]
+    >;
+    setMenuHistory(Array.isArray(payload?.data) ? payload.data : []);
   }
 
   useEffect(() => {
@@ -594,6 +616,7 @@ export default function App() {
       }
 
       await loadMenuItems();
+      await loadMenuItemHistory(String(menuDraft.id));
       setManagementMessage("菜單品項已更新。");
     } catch (menuError) {
       setActionError("更新菜單失敗。");
@@ -616,6 +639,7 @@ export default function App() {
       }
 
       await loadMenuItems();
+      await loadMenuItemHistory(String(menuDraft.id));
       setManagementMessage("菜單品項已刪除。");
     } catch (menuError) {
       setActionError("刪除菜單失敗。");
@@ -1233,7 +1257,49 @@ export default function App() {
                     >
                       刪除
                     </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void loadMenuItemHistory().catch((historyError) => {
+                          setActionError("讀取菜單版本歷史失敗。");
+                          console.error(historyError);
+                        });
+                      }}
+                    >
+                      版本歷史
+                    </button>
                   </div>
+                  {menuHistory.length > 0 ? (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>版本</th>
+                            <th>動作</th>
+                            <th>名稱</th>
+                            <th>價格</th>
+                            <th>時間</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {menuHistory.map((version) => (
+                            <tr key={version.id}>
+                              <td>v{version.version}</td>
+                              <td>{version.action}</td>
+                              <td>{version.snapshot.name}</td>
+                              <td>${version.snapshot.price}</td>
+                              <td>
+                                {new Date(version.changedAt).toLocaleString(
+                                  "zh-TW",
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1275,9 +1341,23 @@ export default function App() {
                         {item.description}
                       </p>
                       <div className="card-actions justify-between items-center">
-                        <span className="text-xl font-bold text-success">
-                          ${item.price}
-                        </span>
+                        <div>
+                          <span className="text-xl font-bold text-success">
+                            ${item.price}
+                          </span>
+                          {item.priceDelta ? (
+                            <div
+                              className={`badge badge-sm mt-1 ${
+                                item.priceDelta > 0
+                                  ? "badge-warning"
+                                  : "badge-info"
+                              }`}
+                            >
+                              {item.priceDelta > 0 ? "漲價" : "降價"} $
+                              {Math.abs(item.priceDelta)}
+                            </div>
+                          ) : null}
+                        </div>
                         <button
                           className="btn btn-sm btn-primary"
                           onClick={() => {

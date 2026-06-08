@@ -11,9 +11,11 @@ import {
   currentUserResponseSchema,
   deleteUserRoleParamsSchema,
   deleteMenuItemParamsSchema,
+  getMenuHistoryParamsSchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
   menuItemResponseSchema,
+  menuItemHistoryResponseSchema,
   menuListResponseSchema,
   nullableOrderResponseEnvelopeSchema,
   orderListResponseSchema,
@@ -380,6 +382,38 @@ app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
     200: menuListResponseSchema,
   },
 });
+
+app.get(
+  "/api/menu/:id/history",
+  async ({ params, request, set }) => {
+    await requireAnyRole(request, store, ["staff", "owner", "admin"]);
+    const input = getMenuHistoryParamsSchema.parse(params);
+    const menuId = parseInt(input.id, 10);
+    const exists = store.getMenu().some((item) => item.id === menuId);
+
+    if (!exists && store.getMenuItemHistory(menuId).length === 0) {
+      set.status = 404;
+      return { error: "Menu item not found" };
+    }
+
+    return { data: [...store.getMenuItemHistory(menuId)] };
+  },
+  {
+    params: getMenuHistoryParamsSchema,
+    detail: {
+      tags: ["menu"],
+      summary: "Get menu item version history",
+      description:
+        "Return version snapshots for one menu item. Staff, owner, and admin only.",
+    },
+    response: {
+      200: menuItemHistoryResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+    },
+  },
+);
 
 app.post(
   "/api/menu",

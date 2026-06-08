@@ -3,6 +3,7 @@ import type {
   CurrentUser,
   InternalRole,
   MenuItem,
+  MenuItemVersion,
   Order,
   OrderItem,
   OrderStatus,
@@ -11,6 +12,7 @@ import type {
 } from "../../shared/contracts.ts";
 import { db } from "../../db/client.ts";
 import {
+  menuItemVersionsTable,
   menuItemsTable,
   orderItemsTable,
   ordersTable,
@@ -45,6 +47,7 @@ function calculateTotal(items: ReadonlyArray<OrderItem>): number {
 export class PgStore implements Store {
   private readonly dataFilePath: string;
   private menu: MenuItem[] = [];
+  private menuVersions: MenuItemVersion[] = [];
   private orders: Order[] = [];
   private userRoles = new Map<string, Role[]>();
   private roleRequests: RoleRequest[] = [];
@@ -56,13 +59,20 @@ export class PgStore implements Store {
   async init(): Promise<void> {
     await db.execute(sql`select 1`);
     await this.seedFromJsonIfEmpty();
+    await this.ensureMenuVersions();
     await this.reloadFromDatabase();
   }
 
   // ── Menu ────────────────────────────────────────────────────
 
   getMenu(): ReadonlyArray<MenuItem> {
-    return this.menu;
+    return this.menu.map((item) => this.withPriceChangeHint(item));
+  }
+
+  getMenuItemHistory(menuId: number): ReadonlyArray<MenuItemVersion> {
+    return this.menuVersions
+      .filter((version) => version.menuItemId === menuId)
+      .sort((a, b) => b.version - a.version);
   }
 
   async createMenuItem(input: {
@@ -95,7 +105,8 @@ export class PgStore implements Store {
     };
 
     this.menu.push(created);
-    return created;
+    await this.recordMenuVersion(created, "created");
+    return this.withPriceChangeHint(created);
   }
 
   async updateMenuItem(
@@ -136,7 +147,8 @@ export class PgStore implements Store {
     const idx = this.menu.findIndex((item) => item.id === menuId);
     if (idx !== -1) this.menu[idx] = next;
 
-    return next;
+    await this.recordMenuVersion(next, "updated");
+    return this.withPriceChangeHint(next);
   }
 
   async deleteMenuItem(menuId: number): Promise<MenuItem | null> {
@@ -155,6 +167,8 @@ export class PgStore implements Store {
       description: removed.description,
       image_url: removed.imageUrl,
     };
+
+    await this.recordMenuVersion(removedItem, "deleted");
 
     const idx = this.menu.findIndex((item) => item.id === menuId);
     if (idx !== -1) this.menu.splice(idx, 1);
@@ -513,6 +527,36 @@ export class PgStore implements Store {
     );
   }
 
+  private async ensureMenuVersions(): Promise<void> {
+    const [countRow] = await db
+      .select({ value: sql<number>`count(*)` })
+      .from(menuItemVersionsTable);
+
+    if (Number(countRow?.value ?? 0) > 0) return;
+
+    const menuRows = await db
+      .select()
+      .from(menuItemsTable)
+      .orderBy(asc(menuItemsTable.id));
+
+    if (menuRows.length === 0) return;
+
+    const changedAt = new Date();
+    await db.insert(menuItemVersionsTable).values(
+      menuRows.map((row) => ({
+        menuItemId: row.id,
+        version: 1,
+        action: "created",
+        name: row.name,
+        price: row.price,
+        category: row.category,
+        description: row.description,
+        imageUrl: row.imageUrl,
+        changedAt,
+      })),
+    );
+  }
+
   private async reloadFromDatabase(): Promise<void> {
     const menuRows = await db
       .select()
@@ -539,6 +583,11 @@ export class PgStore implements Store {
       .from(roleRequestsTable)
       .orderBy(desc(roleRequestsTable.createdAt), desc(roleRequestsTable.id));
 
+    const menuVersionRows = await db
+      .select()
+      .from(menuItemVersionsTable)
+      .orderBy(asc(menuItemVersionsTable.menuItemId), asc(menuItemVersionsTable.version));
+
     this.menu = menuRows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -547,6 +596,8 @@ export class PgStore implements Store {
       description: row.description,
       image_url: row.imageUrl,
     }));
+
+    this.menuVersions = menuVersionRows.map((row) => mapMenuVersionRow(row));
 
     const itemsByOrderId = new Map<number, OrderItem[]>();
     for (const row of orderItemRows) {
@@ -590,6 +641,57 @@ export class PgStore implements Store {
     }
 
     this.roleRequests = roleRequestRows.map((row) => mapRoleRequestRow(row));
+  }
+
+  private async recordMenuVersion(
+    item: MenuItem,
+    action: MenuItemVersion["action"],
+  ): Promise<void> {
+    const currentMaxVersion = this.menuVersions
+      .filter((version) => version.menuItemId === item.id)
+      .reduce((max, version) => Math.max(max, version.version), 0);
+
+    const [inserted] = await db
+      .insert(menuItemVersionsTable)
+      .values({
+        menuItemId: item.id,
+        version: currentMaxVersion + 1,
+        action,
+        name: item.name,
+        price: item.price,
+        category: item.category,
+        description: item.description,
+        imageUrl: item.image_url,
+        changedAt: new Date(),
+      })
+      .returning();
+
+    if (inserted) {
+      this.menuVersions.push(mapMenuVersionRow(inserted));
+    }
+  }
+
+  private withPriceChangeHint(item: MenuItem): MenuItem {
+    const history = this.menuVersions
+      .filter((version) => version.menuItemId === item.id)
+      .sort((a, b) => a.version - b.version);
+    const latest = history.at(-1);
+    const previous = history.at(-2);
+
+    if (!latest) return { ...item };
+
+    const priceDelta =
+      previous && latest.snapshot.price !== previous.snapshot.price
+        ? latest.snapshot.price - previous.snapshot.price
+        : undefined;
+
+    return {
+      ...item,
+      version: latest.version,
+      lastChangedAt: latest.changedAt,
+      previousPrice: priceDelta === undefined ? undefined : previous?.snapshot.price,
+      priceDelta,
+    };
   }
 }
 
@@ -640,5 +742,30 @@ function mapRoleRequestRow(
       ? new Date(row.reviewedAt).toISOString()
       : undefined,
     createdAt: new Date(row.createdAt).toISOString(),
+  };
+}
+
+function mapMenuVersionRow(
+  row: typeof menuItemVersionsTable.$inferSelect,
+): MenuItemVersion {
+  const action =
+    row.action === "updated" || row.action === "deleted"
+      ? row.action
+      : "created";
+
+  return {
+    id: row.id,
+    menuItemId: row.menuItemId,
+    version: row.version,
+    action,
+    snapshot: {
+      id: row.menuItemId,
+      name: row.name,
+      price: row.price,
+      category: row.category,
+      description: row.description,
+      image_url: row.imageUrl,
+    },
+    changedAt: new Date(row.changedAt).toISOString(),
   };
 }

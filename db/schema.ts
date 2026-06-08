@@ -36,6 +36,28 @@ export const menuItemsTable = appSchema.table("menu_items", {
   imageUrl: text("image_url").notNull(),
 });
 
+export const menuItemVersionsTable = appSchema.table(
+  "menu_item_versions",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    menuItemId: integer("menu_item_id").notNull(),
+    version: integer("version").notNull(),
+    action: text("action").notNull(),
+    name: text("name").notNull(),
+    price: integer("price").notNull(),
+    category: text("category").notNull(),
+    description: text("description").notNull(),
+    imageUrl: text("image_url").notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    menuItemVersionUniqueIdx: uniqueIndex("menu_item_versions_item_version_idx").on(
+      table.menuItemId,
+      table.version,
+    ),
+  }),
+);
+
 export const userRolesTable = appSchema.table(
   "user_roles",
   {

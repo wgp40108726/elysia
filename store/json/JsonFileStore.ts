@@ -3,6 +3,7 @@ import type {
   CurrentUser,
   InternalRole,
   MenuItem,
+  MenuItemVersion,
   Order,
   OrderItem,
   OrderStatus,
@@ -22,10 +23,12 @@ interface StoredUser {
 interface DataStore {
   users: StoredUser[];
   menu: MenuItem[];
+  menuVersions: MenuItemVersion[];
   orders: Order[];
   roleRequests: RoleRequest[];
   userIdCounter: number;
   menuIdCounter: number;
+  menuVersionIdCounter: number;
   orderIdCounter: number;
   roleRequestIdCounter: number;
 }
@@ -116,6 +119,50 @@ function normalizeUser(user: Partial<StoredUser>): StoredUser {
   };
 }
 
+function toMenuSnapshot(item: MenuItem): MenuItemVersion["snapshot"] {
+  return {
+    id: item.id,
+    name: item.name,
+    price: item.price,
+    category: item.category,
+    description: item.description,
+    image_url: item.image_url,
+  };
+}
+
+function normalizeMenuVersion(
+  version: Partial<MenuItemVersion>,
+): MenuItemVersion {
+  const action =
+    version.action === "updated" || version.action === "deleted"
+      ? version.action
+      : "created";
+  const snapshot = normalizeMenuItem(version.snapshot ?? {});
+
+  return {
+    id: version.id ?? 0,
+    menuItemId: version.menuItemId ?? snapshot.id,
+    version: version.version ?? 1,
+    action,
+    snapshot: toMenuSnapshot(snapshot),
+    changedAt: version.changedAt ?? new Date().toISOString(),
+  };
+}
+
+function createInitialMenuVersions(
+  menu: ReadonlyArray<MenuItem>,
+): MenuItemVersion[] {
+  const seedTime = new Date().toISOString();
+  return menu.map((item, index) => ({
+    id: index + 1,
+    menuItemId: item.id,
+    version: 1,
+    action: "created",
+    snapshot: toMenuSnapshot(item),
+    changedAt: seedTime,
+  }));
+}
+
 function normalizeRoles(roles: unknown): Role[] {
   if (!Array.isArray(roles)) return ["customer"];
 
@@ -196,10 +243,12 @@ export class JsonFileStore implements Store {
 
   private users: StoredUser[] = [];
   private menu: MenuItem[] = [];
+  private menuVersions: MenuItemVersion[] = [];
   private orders: Order[] = [];
   private roleRequests: RoleRequest[] = [];
   private userIdCounter = 0;
   private menuIdCounter = 0;
+  private menuVersionIdCounter = 0;
   private orderIdCounter = 0;
   private roleRequestIdCounter = 0;
   private persistQueue: Promise<void> = Promise.resolve();
@@ -232,9 +281,15 @@ export class JsonFileStore implements Store {
 
       const fallbackUserId = normalizedUsers[0]?.id ?? "0001";
 
+      const normalizedMenu = parsed.menu.map((item) => normalizeMenuItem(item));
+      const normalizedMenuVersions = Array.isArray(parsed.menuVersions)
+        ? parsed.menuVersions.map((version) => normalizeMenuVersion(version))
+        : createInitialMenuVersions(normalizedMenu);
+
       this.applyStore({
         users: normalizedUsers,
-        menu: parsed.menu.map((item) => normalizeMenuItem(item)),
+        menu: normalizedMenu,
+        menuVersions: normalizedMenuVersions,
         orders: parsed.orders.map((order) => ({
           ...order,
           userId: normalizeUserId(order.userId ?? fallbackUserId),
@@ -250,6 +305,7 @@ export class JsonFileStore implements Store {
           : [],
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
+        menuVersionIdCounter: parsed.menuVersionIdCounter ?? 0,
         orderIdCounter: parsed.orderIdCounter ?? 0,
         roleRequestIdCounter: parsed.roleRequestIdCounter ?? 0,
       });
@@ -262,7 +318,13 @@ export class JsonFileStore implements Store {
   }
 
   getMenu(): ReadonlyArray<MenuItem> {
-    return this.menu;
+    return this.menu.map((item) => this.withPriceChangeHint(item));
+  }
+
+  getMenuItemHistory(menuId: number): ReadonlyArray<MenuItemVersion> {
+    return this.menuVersions
+      .filter((version) => version.menuItemId === menuId)
+      .sort((a, b) => b.version - a.version);
   }
 
   async createMenuItem(input: {
@@ -282,6 +344,7 @@ export class JsonFileStore implements Store {
     };
 
     this.menu.push(newMenuItem);
+    this.recordMenuVersion(newMenuItem, "created");
     await this.persist();
 
     return newMenuItem;
@@ -308,9 +371,10 @@ export class JsonFileStore implements Store {
     menuItem.description = patch.description ?? menuItem.description;
     menuItem.image_url = patch.image_url ?? menuItem.image_url;
 
+    this.recordMenuVersion(menuItem, "updated");
     await this.persist();
 
-    return menuItem;
+    return this.withPriceChangeHint(menuItem);
   }
 
   async deleteMenuItem(menuId: number): Promise<MenuItem | null> {
@@ -320,6 +384,9 @@ export class JsonFileStore implements Store {
     }
 
     const [removedMenuItem] = this.menu.splice(targetIndex, 1);
+    if (removedMenuItem) {
+      this.recordMenuVersion(removedMenuItem, "deleted");
+    }
     await this.persist();
 
     return removedMenuItem ?? null;
@@ -592,10 +659,12 @@ export class JsonFileStore implements Store {
     return {
       users: cloneDefaultUsers(),
       menu: cloneDefaultMenu(),
+      menuVersions: createInitialMenuVersions(cloneDefaultMenu()),
       orders: [],
       roleRequests: [],
       userIdCounter: defaultUsers.length,
       menuIdCounter: defaultMenu.length,
+      menuVersionIdCounter: defaultMenu.length,
       orderIdCounter: 0,
       roleRequestIdCounter: 0,
     };
@@ -604,6 +673,7 @@ export class JsonFileStore implements Store {
   private applyStore(store: DataStore): void {
     this.users = store.users;
     this.menu = store.menu;
+    this.menuVersions = store.menuVersions;
     this.orders = store.orders;
     this.roleRequests = store.roleRequests;
 
@@ -614,6 +684,10 @@ export class JsonFileStore implements Store {
 
     const maxMenuId = this.menu.reduce(
       (max, item) => Math.max(max, item.id),
+      0,
+    );
+    const maxMenuVersionId = this.menuVersions.reduce(
+      (max, version) => Math.max(max, version.id),
       0,
     );
     const maxOrderId = this.orders.reduce(
@@ -627,6 +701,10 @@ export class JsonFileStore implements Store {
 
     this.userIdCounter = Math.max(store.userIdCounter || 0, maxUserId);
     this.menuIdCounter = Math.max(store.menuIdCounter || 0, maxMenuId);
+    this.menuVersionIdCounter = Math.max(
+      store.menuVersionIdCounter || 0,
+      maxMenuVersionId,
+    );
     this.orderIdCounter = Math.max(store.orderIdCounter || 0, maxOrderId);
     this.roleRequestIdCounter = Math.max(
       store.roleRequestIdCounter || 0,
@@ -638,12 +716,57 @@ export class JsonFileStore implements Store {
     return {
       users: this.users,
       menu: this.menu,
+      menuVersions: this.menuVersions,
       orders: this.orders,
       roleRequests: this.roleRequests,
       userIdCounter: this.userIdCounter,
       menuIdCounter: this.menuIdCounter,
+      menuVersionIdCounter: this.menuVersionIdCounter,
       orderIdCounter: this.orderIdCounter,
       roleRequestIdCounter: this.roleRequestIdCounter,
+    };
+  }
+
+  private recordMenuVersion(
+    item: MenuItem,
+    action: MenuItemVersion["action"],
+  ): void {
+    const currentMaxVersion = this.menuVersions
+      .filter((version) => version.menuItemId === item.id)
+      .reduce((max, version) => Math.max(max, version.version), 0);
+
+    this.menuVersions.push({
+      id: ++this.menuVersionIdCounter,
+      menuItemId: item.id,
+      version: currentMaxVersion + 1,
+      action,
+      snapshot: toMenuSnapshot(item),
+      changedAt: new Date().toISOString(),
+    });
+  }
+
+  private withPriceChangeHint(item: MenuItem): MenuItem {
+    const history = this.menuVersions
+      .filter((version) => version.menuItemId === item.id)
+      .sort((a, b) => a.version - b.version);
+    const latest = history.at(-1);
+    const previous = history.at(-2);
+
+    if (!latest) {
+      return { ...item };
+    }
+
+    const priceDelta =
+      previous && latest.snapshot.price !== previous.snapshot.price
+        ? latest.snapshot.price - previous.snapshot.price
+        : undefined;
+
+    return {
+      ...item,
+      version: latest.version,
+      lastChangedAt: latest.changedAt,
+      previousPrice: priceDelta === undefined ? undefined : previous?.snapshot.price,
+      priceDelta,
     };
   }
 
