@@ -19,6 +19,7 @@ import {
   roleRequestsTable,
   userRolesTable,
 } from "../../db/schema.ts";
+import { user } from "../../db/auth-schema.ts";
 import type { Store } from "../Store.ts";
 
 interface PgStoreOptions {
@@ -180,6 +181,15 @@ export class PgStore implements Store {
     return this.userRoles.get(userId) ?? ["customer"];
   }
 
+  async userExists(userId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.id, userId))
+      .limit(1);
+    return Boolean(row);
+  }
+
   async setUserRoles(
     userId: string,
     roles: ReadonlyArray<Role>,
@@ -243,6 +253,18 @@ export class PgStore implements Store {
     this.roleRequests.push(roleRequest);
 
     return roleRequest;
+  }
+
+  hasPendingRoleRequest(
+    userId: string,
+    requestedRole: InternalRole,
+  ): boolean {
+    return this.roleRequests.some(
+      (request) =>
+        request.userId === userId &&
+        request.requestedRole === requestedRole &&
+        request.status === "pending",
+    );
   }
 
   getRoleRequests(): ReadonlyArray<RoleRequest> {
@@ -321,9 +343,14 @@ export class PgStore implements Store {
     return this.orders.find((o) => o.id === orderId);
   }
 
-  async createOrder(input: { userId: string }): Promise<Order> {
+  async createOrder(input: {
+    userId: string;
+    createdByUserId?: string;
+    createdOnBehalf?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<Order> {
     const existingOrder = this.getCurrentOrderByUserId(input.userId);
-    if (existingOrder) {
+    if (existingOrder && input.reuseExisting !== false) {
       return existingOrder;
     }
 
@@ -331,7 +358,14 @@ export class PgStore implements Store {
 
     const [inserted] = await db
       .insert(ordersTable)
-      .values({ userId: input.userId, status: "pending", total: 0, createdAt })
+      .values({
+        userId: input.userId,
+        createdByUserId: input.createdByUserId,
+        createdOnBehalf: input.createdOnBehalf ?? false,
+        status: "pending",
+        total: 0,
+        createdAt,
+      })
       .returning();
 
     if (!inserted) throw new Error("Failed to create order");
@@ -339,6 +373,8 @@ export class PgStore implements Store {
     const order: Order = {
       id: inserted.id,
       userId: input.userId,
+      createdByUserId: inserted.createdByUserId ?? undefined,
+      createdOnBehalf: inserted.createdOnBehalf,
       items: [],
       total: inserted.total,
       status: "pending",
@@ -354,7 +390,12 @@ export class PgStore implements Store {
 
   async updateOrderItem(
     orderId: number,
-    input: { userId: string; itemId: number; qty: number },
+    input: {
+      userId: string;
+      itemId: number;
+      qty: number;
+      canEditAnyOrder?: boolean;
+    },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -368,7 +409,7 @@ export class PgStore implements Store {
   > {
     const order = this.orders.find((o) => o.id === orderId);
     if (!order) return { ok: false, code: "ORDER_NOT_FOUND" };
-    if (order.userId !== input.userId)
+    if (order.userId !== input.userId && !input.canEditAnyOrder)
       return { ok: false, code: "ORDER_NOT_OWNED" };
     if (order.status !== "pending")
       return { ok: false, code: "ORDER_NOT_EDITABLE" };
@@ -429,7 +470,7 @@ export class PgStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; canSubmitAnyOrder?: boolean },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -443,7 +484,7 @@ export class PgStore implements Store {
   > {
     const order = this.orders.find((o) => o.id === orderId);
     if (!order) return { ok: false, code: "ORDER_NOT_FOUND" };
-    if (order.userId !== input.userId)
+    if (order.userId !== input.userId && !input.canSubmitAnyOrder)
       return { ok: false, code: "ORDER_NOT_OWNED" };
     if (order.status !== "pending")
       return { ok: false, code: "ORDER_NOT_EDITABLE" };
@@ -619,6 +660,8 @@ export class PgStore implements Store {
     this.orders = orderRows.map((row) => ({
       id: row.id,
       userId: row.userId,
+      createdByUserId: row.createdByUserId ?? undefined,
+      createdOnBehalf: row.createdOnBehalf,
       items: itemsByOrderId.get(row.id) ?? [],
       total: row.total,
       status: asOrderStatus(row.status),

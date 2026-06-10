@@ -1,10 +1,12 @@
 import {
+  boolean,
   integer,
   pgSchema,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { user } from "./auth-schema.ts";
 
 // PostgreSQL namespace 隔離
@@ -74,26 +76,38 @@ export const userRolesTable = appSchema.table(
   }),
 );
 
-export const roleRequestsTable = appSchema.table("role_requests", {
-  id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  userName: text("user_name").notNull(),
-  userEmail: text("user_email").notNull(),
-  requestedRole: text("requested_role").notNull(),
-  reason: text("reason").notNull().default(""),
-  status: text("status").notNull().default("pending"),
-  reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-});
+export const roleRequestsTable = appSchema.table(
+  "role_requests",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    userName: text("user_name").notNull(),
+    userEmail: text("user_email").notNull(),
+    requestedRole: text("requested_role").notNull(),
+    reason: text("reason").notNull().default(""),
+    status: text("status").notNull().default("pending"),
+    reviewedBy: text("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pendingRoleRequestUniqueIdx: uniqueIndex(
+      "role_requests_pending_user_role_idx",
+    )
+      .on(table.userId, table.requestedRole)
+      .where(sql`${table.status} = 'pending'`),
+  }),
+);
 
 export const ordersTable = appSchema.table("orders", {
   id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
   userId: text("user_id")
     .notNull()
     .references(() => user.id),
+  createdByUserId: text("created_by_user_id").references(() => user.id),
+  createdOnBehalf: boolean("created_on_behalf").notNull().default(false),
   total: integer("total").notNull().default(0),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),

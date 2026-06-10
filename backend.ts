@@ -6,6 +6,7 @@ import { networkInterfaces } from "node:os";
 import toTaipeiDateTime from "./util.ts";
 import {
   apiErrorResponseSchema,
+  createOrderOnBehalfBodySchema,
   createRoleRequestBodySchema,
   createMenuItemBodySchema,
   currentUserResponseSchema,
@@ -210,6 +211,17 @@ app.post(
   async ({ body, request, set }) => {
     const input = createRoleRequestBodySchema.parse(body);
     const user = await requireUser(request, store);
+
+    if (user.roles.includes(input.requestedRole)) {
+      set.status = 409;
+      return { error: "User already has this role" };
+    }
+
+    if (store.hasPendingRoleRequest(user.id, input.requestedRole)) {
+      set.status = 409;
+      return { error: "A pending request for this role already exists" };
+    }
+
     const roleRequest = await store.createRoleRequest({
       user,
       requestedRole: input.requestedRole,
@@ -228,6 +240,7 @@ app.post(
     response: {
       201: roleRequestResponseSchema,
       401: apiErrorResponseSchema,
+      409: apiErrorResponseSchema,
     },
   },
 );
@@ -505,12 +518,22 @@ app.get(
   "/api/orders",
   async ({ request }) => {
     const user = await requireUser(request, store);
-    const orders = hasAnyRole(user, ["staff", "chef", "owner", "admin"])
+    const chefOnly =
+      hasAnyRole(user, ["chef"]) &&
+      !hasAnyRole(user, ["staff", "owner", "admin"]);
+    const visibleOrders = hasAnyRole(user, ["staff", "chef", "owner", "admin"])
       ? store.getOrders()
       : store.getOrders().filter((order) => order.userId === user.id);
+    const orders = chefOnly
+      ? visibleOrders.filter((order) =>
+          ["submitted", "preparing", "ready"].includes(order.status),
+        )
+      : visibleOrders;
 
     return {
-      data: orders.map(toOrderResponse),
+      data: orders.map((order) =>
+        toOrderResponse(order, { hideCustomerIdentity: chefOnly }),
+      ),
     };
   },
   {
@@ -600,6 +623,82 @@ app.post(
   },
 );
 
+// 櫃台代替顧客建立訂單
+app.post(
+  "/api/orders/on-behalf",
+  async ({ body, request, set }) => {
+    const input = createOrderOnBehalfBodySchema.parse(body);
+    const creator = await requireAnyRole(request, store, [
+      "staff",
+      "owner",
+      "admin",
+    ]);
+
+    if (!(await store.userExists(input.customerId))) {
+      set.status = 404;
+      return { error: "Customer not found" };
+    }
+
+    if (store.getCurrentOrderByUserId(input.customerId)) {
+      set.status = 409;
+      return { error: "Customer already has a pending order" };
+    }
+
+    const menuItemIds = new Set(store.getMenu().map((item) => item.id));
+    if (input.items.some((item) => !menuItemIds.has(item.itemId))) {
+      set.status = 404;
+      return { error: "Menu item not found" };
+    }
+
+    const order = await store.createOrder({
+      userId: input.customerId,
+      createdByUserId: creator.id,
+      createdOnBehalf: true,
+      reuseExisting: false,
+    });
+
+    let updatedOrder = order;
+    for (const item of input.items) {
+      const result = await store.updateOrderItem(order.id, {
+        userId: creator.id,
+        itemId: item.itemId,
+        qty: item.qty,
+        canEditAnyOrder: true,
+      });
+
+      if (!result.ok) {
+        set.status = result.code === "MENU_ITEM_NOT_FOUND" ? 404 : 409;
+        return {
+          error:
+            result.code === "MENU_ITEM_NOT_FOUND"
+              ? "Menu item not found"
+              : "Order could not be created",
+        };
+      }
+      updatedOrder = result.order;
+    }
+
+    set.status = 201;
+    return { data: toOrderResponse(updatedOrder) };
+  },
+  {
+    body: createOrderOnBehalfBodySchema,
+    detail: {
+      tags: ["orders"],
+      summary: "Create an order on behalf of a customer",
+      description:
+        "Create a pending order for a customer and record the staff member who created it.",
+    },
+    response: {
+      201: orderResponseEnvelopeSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+      409: apiErrorResponseSchema,
+    },
+  },
+);
+
 // 獲取單筆訂單
 app.get(
   "/api/orders/:id",
@@ -621,7 +720,20 @@ app.get(
       return { error: "Forbidden" };
     }
 
-    return { data: toOrderResponse(order) };
+    const chefOnly =
+      hasAnyRole(user, ["chef"]) &&
+      !hasAnyRole(user, ["staff", "owner", "admin"]);
+    if (
+      chefOnly &&
+      !["submitted", "preparing", "ready"].includes(order.status)
+    ) {
+      set.status = 403;
+      return { error: "Order is not in the kitchen queue" };
+    }
+
+    return {
+      data: toOrderResponse(order, { hideCustomerIdentity: chefOnly }),
+    };
   },
   {
     params: getOrderByIdParamsSchema,
@@ -646,11 +758,17 @@ app.patch(
   async ({ params, body, request, set }) => {
     const input = updateOrderBodySchema.parse(body);
     const user = await requireUser(request, store);
+    const canEditCustomerOrder = hasAnyRole(user, [
+      "staff",
+      "owner",
+      "admin",
+    ]);
     const orderId = parseInt(params.id);
     const result = await store.updateOrderItem(orderId, {
       userId: user.id,
       itemId: input.itemId,
       qty: input.qty,
+      canEditAnyOrder: canEditCustomerOrder,
     });
 
     if (result.ok) {
@@ -704,8 +822,16 @@ app.post(
   "/api/orders/:id/submit",
   async ({ params, request, set }) => {
     const user = await requireUser(request, store);
+    const canSubmitCustomerOrder = hasAnyRole(user, [
+      "staff",
+      "owner",
+      "admin",
+    ]);
     const orderId = parseInt(params.id, 10);
-    const result = await store.submitOrder(orderId, { userId: user.id });
+    const result = await store.submitOrder(orderId, {
+      userId: user.id,
+      canSubmitAnyOrder: canSubmitCustomerOrder,
+    });
 
     if (result.ok) {
       return { data: toOrderResponse(result.order) };

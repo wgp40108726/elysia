@@ -103,6 +103,8 @@ export const orderStatusSchema = z.enum([
 export const orderSchema = z.object({
   id: z.number().int().min(1),
   userId: z.string().min(1),
+  createdByUserId: z.string().min(1).optional(),
+  createdOnBehalf: z.boolean().default(false),
   items: z.array(orderItemSchema),
   total: z.number().min(0),
   status: orderStatusSchema,

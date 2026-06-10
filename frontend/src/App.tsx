@@ -41,6 +41,12 @@ export default function App() {
   const [roleRequestReason, setRoleRequestReason] = useState("");
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [assistedCustomerId, setAssistedCustomerId] = useState("");
+  const [assistedItemId, setAssistedItemId] = useState("");
+  const [assistedQty, setAssistedQty] = useState("1");
+  const [editOrderId, setEditOrderId] = useState("");
+  const [editOrderItemId, setEditOrderItemId] = useState("");
+  const [editOrderQty, setEditOrderQty] = useState("1");
   const [menuHistory, setMenuHistory] = useState<MenuItemVersion[]>([]);
   const [managementMessage, setManagementMessage] = useState("");
   const [targetUserId, setTargetUserId] = useState("");
@@ -63,6 +69,9 @@ export default function App() {
     user?.roles.some((role) =>
       ["staff", "chef", "owner", "admin"].includes(role),
     ),
+  );
+  const canAssistOrders = Boolean(
+    user?.roles.some((role) => ["staff", "owner", "admin"].includes(role)),
   );
 
   async function loadCurrentUser(): Promise<CurrentUser | null> {
@@ -426,6 +435,17 @@ export default function App() {
       });
 
       if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        if (response.status === 409) {
+          setActionError(
+            payload?.error === "User already has this role"
+              ? "你已經擁有這個角色。"
+              : "相同角色已有待審申請，請勿重複送出。",
+          );
+          return;
+        }
         throw new Error(`Create role request failed: HTTP ${response.status}`);
       }
 
@@ -560,6 +580,79 @@ export default function App() {
     } catch (statusError) {
       setActionError("更新訂單狀態失敗。");
       console.error(statusError);
+    }
+  }
+
+  async function createOrderOnBehalf(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/orders/on-behalf"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          customerId: assistedCustomerId.trim(),
+          items: [
+            {
+              itemId: Number(assistedItemId),
+              qty: Number(assistedQty),
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<Order>;
+      await loadAllOrders();
+      setAssistedItemId("");
+      setAssistedQty("1");
+      setManagementMessage(`已代建訂單 #${payload.data.id}。`);
+    } catch (createError) {
+      setActionError(
+        createError instanceof Error &&
+          createError.message === "Customer already has a pending order"
+          ? "該顧客已有待編輯訂單，請直接協助修改。"
+          : "櫃台代建訂單失敗，請確認顧客與品項 ID。",
+      );
+      console.error(createError);
+    }
+  }
+
+  async function updateCustomerOrderItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/orders/${editOrderId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            itemId: Number(editOrderItemId),
+            qty: Number(editOrderQty),
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      await loadAllOrders();
+      setManagementMessage(`訂單 #${editOrderId} 品項已更新。`);
+    } catch (updateError) {
+      setActionError("只能修改 pending 訂單，請確認訂單與品項 ID。");
+      console.error(updateError);
     }
   }
 
@@ -957,9 +1050,24 @@ export default function App() {
                         setRoleRequestRole(event.target.value as InternalRole);
                       }}
                     >
-                      <option value="staff">staff 櫃台</option>
-                      <option value="chef">chef 廚師</option>
-                      <option value="owner">owner 店長</option>
+                      <option
+                        value="staff"
+                        disabled={user.roles.includes("staff")}
+                      >
+                        staff 櫃台
+                      </option>
+                      <option
+                        value="chef"
+                        disabled={user.roles.includes("chef")}
+                      >
+                        chef 廚師
+                      </option>
+                      <option
+                        value="owner"
+                        disabled={user.roles.includes("owner")}
+                      >
+                        owner 店長
+                      </option>
                     </select>
                     <textarea
                       className="textarea textarea-bordered w-full min-h-24"
@@ -971,6 +1079,7 @@ export default function App() {
                     />
                     <button
                       className="btn btn-primary w-full"
+                      disabled={user.roles.includes(roleRequestRole)}
                       onClick={() => {
                         void submitRoleRequest();
                       }}
@@ -1099,6 +1208,92 @@ export default function App() {
                       更新
                     </button>
                   </div>
+                  {canAssistOrders ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300">
+                        <h4 className="font-semibold mb-2">櫃台代建訂單</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedCustomerId}
+                            onChange={(event) => {
+                              setAssistedCustomerId(event.target.value);
+                            }}
+                            placeholder="顧客 user id"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedItemId}
+                            onChange={(event) => {
+                              setAssistedItemId(event.target.value);
+                            }}
+                            placeholder="品項 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedQty}
+                            onChange={(event) => {
+                              setAssistedQty(event.target.value);
+                            }}
+                            placeholder="數量"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <button
+                          className="btn btn-primary btn-sm mt-2 w-full"
+                          disabled={!assistedCustomerId || !assistedItemId}
+                          onClick={() => {
+                            void createOrderOnBehalf();
+                          }}
+                        >
+                          代替顧客建立
+                        </button>
+                      </div>
+
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300">
+                        <h4 className="font-semibold mb-2">協助修改 pending 訂單</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderId}
+                            onChange={(event) => {
+                              setEditOrderId(event.target.value);
+                            }}
+                            placeholder="訂單 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderItemId}
+                            onChange={(event) => {
+                              setEditOrderItemId(event.target.value);
+                            }}
+                            placeholder="品項 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderQty}
+                            onChange={(event) => {
+                              setEditOrderQty(event.target.value);
+                            }}
+                            placeholder="數量，0 為移除"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <button
+                          className="btn btn-secondary btn-sm mt-2 w-full"
+                          disabled={!editOrderId || !editOrderItemId}
+                          onClick={() => {
+                            void updateCustomerOrderItem();
+                          }}
+                        >
+                          更新顧客訂單
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                   {allOrders.length === 0 ? (
                     <div className="alert">
                       <span>目前沒有訂單。</span>
@@ -1109,9 +1304,10 @@ export default function App() {
                         <thead>
                           <tr>
                             <th>ID</th>
+                            {canAssistOrders ? <th>顧客</th> : null}
                             <th>狀態</th>
-                            <th>金額</th>
-                            <th>品項</th>
+                            {canAssistOrders ? <th>金額</th> : null}
+                            <th>製作內容</th>
                             <th>操作</th>
                           </tr>
                         </thead>
@@ -1119,13 +1315,31 @@ export default function App() {
                           {allOrders.map((order) => (
                             <tr key={order.id}>
                               <td>#{order.id}</td>
+                              {canAssistOrders ? (
+                                <td>
+                                  <div className="text-xs">{order.userId}</div>
+                                  {order.createdOnBehalf ? (
+                                    <span className="badge badge-info badge-xs">
+                                      櫃台代建
+                                    </span>
+                                  ) : null}
+                                </td>
+                              ) : null}
                               <td>
                                 <span className="badge badge-outline">
                                   {order.status}
                                 </span>
                               </td>
-                              <td>${order.total}</td>
-                              <td>{order.items.length}</td>
+                              {canAssistOrders ? <td>${order.total}</td> : null}
+                              <td>
+                                <ul className="text-xs space-y-1">
+                                  {order.items.map((detail) => (
+                                    <li key={`${order.id}-${detail.item.id}`}>
+                                      {detail.item.name} x {detail.qty}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </td>
                               <td>
                                 <select
                                   className="select select-bordered select-xs"

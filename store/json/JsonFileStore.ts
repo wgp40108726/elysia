@@ -293,6 +293,10 @@ export class JsonFileStore implements Store {
         orders: parsed.orders.map((order) => ({
           ...order,
           userId: normalizeUserId(order.userId ?? fallbackUserId),
+          createdByUserId: order.createdByUserId
+            ? normalizeUserId(order.createdByUserId)
+            : undefined,
+          createdOnBehalf: order.createdOnBehalf ?? false,
           items: order.items.map((orderItem) => ({
             ...orderItem,
             item: normalizeMenuItem(orderItem.item),
@@ -396,6 +400,10 @@ export class JsonFileStore implements Store {
     return this.users.find((user) => user.id === userId)?.roles ?? ["customer"];
   }
 
+  async userExists(userId: string): Promise<boolean> {
+    return this.users.some((user) => user.id === userId);
+  }
+
   async setUserRoles(
     userId: string,
     roles: ReadonlyArray<Role>,
@@ -422,7 +430,8 @@ export class JsonFileStore implements Store {
   async deleteUserRole(userId: string, role: Role): Promise<Role[]> {
     const currentRoles = this.getUserRoles(userId);
     const nextRoles = currentRoles.filter((currentRole) => currentRole !== role);
-    const normalizedRoles = nextRoles.length > 0 ? nextRoles : ["customer"];
+    const normalizedRoles: Role[] =
+      nextRoles.length > 0 ? nextRoles : ["customer"];
 
     return this.setUserRoles(userId, normalizedRoles);
   }
@@ -447,6 +456,18 @@ export class JsonFileStore implements Store {
     await this.persist();
 
     return roleRequest;
+  }
+
+  hasPendingRoleRequest(
+    userId: string,
+    requestedRole: InternalRole,
+  ): boolean {
+    return this.roleRequests.some(
+      (request) =>
+        request.userId === userId &&
+        request.requestedRole === requestedRole &&
+        request.status === "pending",
+    );
   }
 
   getRoleRequests(): ReadonlyArray<RoleRequest> {
@@ -514,15 +535,22 @@ export class JsonFileStore implements Store {
     return this.orders.find((order) => order.id === orderId);
   }
 
-  async createOrder(input: { userId: string }): Promise<Order> {
+  async createOrder(input: {
+    userId: string;
+    createdByUserId?: string;
+    createdOnBehalf?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<Order> {
     const existingOrder = this.getCurrentOrderByUserId(input.userId);
-    if (existingOrder) {
+    if (existingOrder && input.reuseExisting !== false) {
       return existingOrder;
     }
 
     const newOrder: Order = {
       id: ++this.orderIdCounter,
       userId: input.userId,
+      createdByUserId: input.createdByUserId,
+      createdOnBehalf: input.createdOnBehalf ?? false,
       items: [],
       total: 0,
       status: "pending",
@@ -541,6 +569,7 @@ export class JsonFileStore implements Store {
       userId: string;
       itemId: number;
       qty: number;
+      canEditAnyOrder?: boolean;
     },
   ): Promise<
     | { ok: true; order: Order }
@@ -558,7 +587,7 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "ORDER_NOT_FOUND" };
     }
 
-    if (order.userId !== input.userId) {
+    if (order.userId !== input.userId && !input.canEditAnyOrder) {
       return { ok: false, code: "ORDER_NOT_OWNED" };
     }
 
@@ -595,7 +624,7 @@ export class JsonFileStore implements Store {
 
   async submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; canSubmitAnyOrder?: boolean },
   ): Promise<
     | { ok: true; order: Order }
     | {
@@ -612,7 +641,7 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "ORDER_NOT_FOUND" };
     }
 
-    if (order.userId !== input.userId) {
+    if (order.userId !== input.userId && !input.canSubmitAnyOrder) {
       return { ok: false, code: "ORDER_NOT_OWNED" };
     }
 

@@ -48,6 +48,7 @@ export interface Store {
   deleteMenuItem(menuId: number): Promise<MenuItem | null>;
 
   getUserRoles(userId: string): ReadonlyArray<Role>;
+  userExists(userId: string): Promise<boolean>;
   setUserRoles(userId: string, roles: ReadonlyArray<Role>): Promise<Role[]>;
   deleteUserRole(userId: string, role: Role): Promise<Role[]>;
   createRoleRequest(input: {
@@ -55,6 +56,7 @@ export interface Store {
     requestedRole: InternalRole;
     reason: string;
   }): Promise<RoleRequest>;
+  hasPendingRoleRequest(userId: string, requestedRole: InternalRole): boolean;
   getRoleRequests(): ReadonlyArray<RoleRequest>;
   getRoleRequestById(requestId: number): RoleRequest | undefined;
   reviewRoleRequest(
@@ -66,20 +68,26 @@ export interface Store {
   getCurrentOrderByUserId(userId: string): Order | undefined;
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order>;
   getOrderById(orderId: number): Order | undefined;
-  createOrder(input: { userId: string }): Promise<Order>;
+  createOrder(input: {
+    userId: string;
+    createdByUserId?: string;
+    createdOnBehalf?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<Order>;
   updateOrderItem(
     orderId: number,
     input: {
       userId: string;
       itemId: number;
       qty: number;
+      canEditAnyOrder?: boolean;
     },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: UpdateOrderItemErrorCode }
   >;
   submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; canSubmitAnyOrder?: boolean },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: SubmitOrderErrorCode }
   >;

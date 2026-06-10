@@ -26,6 +26,7 @@ export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 // ─── API Layer Order Response（Order 的 API 層呈現）──────────────────────
 
 export const orderResponseSchema = orderSchema.extend({
+  userId: z.string().min(1).optional(),
   createdAtTaipei: z.string().min(1),
 });
 
@@ -35,9 +36,18 @@ export type OrderResponse = z.infer<typeof orderResponseSchema>;
  * 將數據庫/內部 Order 轉換為 API 響應格式
  * 添加台北時區時間戳
  */
-export function toOrderResponse(order: Order): OrderResponse {
+export function toOrderResponse(
+  order: Order,
+  options: { hideCustomerIdentity?: boolean } | number = {},
+): OrderResponse {
+  const { userId, createdByUserId, ...safeOrder } = order;
+  const hideCustomerIdentity =
+    typeof options === "object" && options.hideCustomerIdentity === true;
+
   return {
-    ...order,
+    ...(hideCustomerIdentity
+      ? safeOrder
+      : { ...safeOrder, userId, createdByUserId }),
     createdAtTaipei: toTaipeiDateTime(order.createdAt),
   };
 }
@@ -89,6 +99,19 @@ export const updateOrderParamsSchema = z.object({
 export const updateOrderBodySchema = z.object({
   itemId: z.number().int().min(1),
   qty: z.number().min(0),
+});
+
+/** POST /api/orders/on-behalf */
+export const createOrderOnBehalfBodySchema = z.object({
+  customerId: z.string().min(1),
+  items: z
+    .array(
+      z.object({
+        itemId: z.number().int().min(1),
+        qty: z.number().int().min(1),
+      }),
+    )
+    .min(1),
 });
 
 /** POST /api/orders/:id/submit */
