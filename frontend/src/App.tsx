@@ -17,6 +17,15 @@ function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
 }
 
+const orderStatusLabel: Record<Order["status"], string> = {
+  pending: "待送出",
+  submitted: "已送出",
+  preparing: "製作中",
+  ready: "可取餐",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
 export default function App() {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -1317,7 +1326,9 @@ export default function App() {
                               <td>#{order.id}</td>
                               {canAssistOrders ? (
                                 <td>
-                                  <div className="text-xs">{order.userId}</div>
+                                  <div className="text-sm font-medium">
+                                    {order.customerName ?? "未知顧客"}
+                                  </div>
                                   {order.createdOnBehalf ? (
                                     <span className="badge badge-info badge-xs">
                                       櫃台代建
@@ -1327,7 +1338,7 @@ export default function App() {
                               ) : null}
                               <td>
                                 <span className="badge badge-outline">
-                                  {order.status}
+                                  {orderStatusLabel[order.status]}
                                 </span>
                               </td>
                               {canAssistOrders ? <td>${order.total}</td> : null}
@@ -1351,11 +1362,14 @@ export default function App() {
                                     );
                                   }}
                                 >
-                                  <option value="submitted">submitted</option>
-                                  <option value="preparing">preparing</option>
-                                  <option value="ready">ready</option>
-                                  <option value="completed">completed</option>
-                                  <option value="cancelled">cancelled</option>
+                                  <option value="pending" disabled>
+                                    待送出
+                                  </option>
+                                  <option value="submitted">已送出</option>
+                                  <option value="preparing">製作中</option>
+                                  <option value="ready">可取餐</option>
+                                  <option value="completed">已完成</option>
+                                  <option value="cancelled">已取消</option>
                                 </select>
                               </td>
                             </tr>

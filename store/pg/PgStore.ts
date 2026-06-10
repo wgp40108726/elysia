@@ -51,6 +51,7 @@ export class PgStore implements Store {
   private menuVersions: MenuItemVersion[] = [];
   private orders: Order[] = [];
   private userRoles = new Map<string, Role[]>();
+  private userNames = new Map<string, string>();
   private roleRequests: RoleRequest[] = [];
 
   constructor(options: PgStoreOptions = {}) {
@@ -183,10 +184,11 @@ export class PgStore implements Store {
 
   async userExists(userId: string): Promise<boolean> {
     const [row] = await db
-      .select({ id: user.id })
+      .select({ id: user.id, name: user.name })
       .from(user)
       .where(eq(user.id, userId))
       .limit(1);
+    if (row) this.userNames.set(row.id, row.name);
     return Boolean(row);
   }
 
@@ -373,6 +375,7 @@ export class PgStore implements Store {
     const order: Order = {
       id: inserted.id,
       userId: input.userId,
+      customerName: this.userNames.get(input.userId),
       createdByUserId: inserted.createdByUserId ?? undefined,
       createdOnBehalf: inserted.createdOnBehalf,
       items: [],
@@ -624,6 +627,11 @@ export class PgStore implements Store {
       .from(roleRequestsTable)
       .orderBy(desc(roleRequestsTable.createdAt), desc(roleRequestsTable.id));
 
+    const userRows = await db
+      .select({ id: user.id, name: user.name })
+      .from(user)
+      .orderBy(asc(user.id));
+
     const menuVersionRows = await db
       .select()
       .from(menuItemVersionsTable)
@@ -657,9 +665,12 @@ export class PgStore implements Store {
       itemsByOrderId.set(row.orderId, items);
     }
 
+    this.userNames = new Map(userRows.map((row) => [row.id, row.name]));
+
     this.orders = orderRows.map((row) => ({
       id: row.id,
       userId: row.userId,
+      customerName: this.userNames.get(row.userId),
       createdByUserId: row.createdByUserId ?? undefined,
       createdOnBehalf: row.createdOnBehalf,
       items: itemsByOrderId.get(row.id) ?? [],

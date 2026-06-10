@@ -30,6 +30,7 @@ describe("V10 RBAC order flows", () => {
     });
 
     expect(order.userId).toBe("0002");
+    expect(order.customerName).toBe("Amy");
     expect(order.createdByUserId).toBe("0001");
     expect(order.createdOnBehalf).toBe(true);
   });
@@ -77,6 +78,7 @@ describe("V10 RBAC order flows", () => {
       hideCustomerIdentity: true,
     });
     expect(response.userId).toBeUndefined();
+    expect(response.customerName).toBeUndefined();
     expect(response.createdByUserId).toBeUndefined();
     expect(response.id).toBe(order.id);
     expect(response.items).toEqual(order.items);

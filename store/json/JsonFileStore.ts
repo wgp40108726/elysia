@@ -293,6 +293,11 @@ export class JsonFileStore implements Store {
         orders: parsed.orders.map((order) => ({
           ...order,
           userId: normalizeUserId(order.userId ?? fallbackUserId),
+          customerName:
+            normalizedUsers.find(
+              (user) =>
+                user.id === normalizeUserId(order.userId ?? fallbackUserId),
+            )?.name ?? order.customerName,
           createdByUserId: order.createdByUserId
             ? normalizeUserId(order.createdByUserId)
             : undefined,
@@ -549,6 +554,7 @@ export class JsonFileStore implements Store {
     const newOrder: Order = {
       id: ++this.orderIdCounter,
       userId: input.userId,
+      customerName: this.users.find((user) => user.id === input.userId)?.name,
       createdByUserId: input.createdByUserId,
       createdOnBehalf: input.createdOnBehalf ?? false,
       items: [],

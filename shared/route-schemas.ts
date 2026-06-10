@@ -40,14 +40,14 @@ export function toOrderResponse(
   order: Order,
   options: { hideCustomerIdentity?: boolean } | number = {},
 ): OrderResponse {
-  const { userId, createdByUserId, ...safeOrder } = order;
+  const { userId, customerName, createdByUserId, ...safeOrder } = order;
   const hideCustomerIdentity =
     typeof options === "object" && options.hideCustomerIdentity === true;
 
   return {
     ...(hideCustomerIdentity
       ? safeOrder
-      : { ...safeOrder, userId, createdByUserId }),
+      : { ...safeOrder, userId, customerName, createdByUserId }),
     createdAtTaipei: toTaipeiDateTime(order.createdAt),
   };
 }
