@@ -13,10 +13,13 @@ import {
   deleteUserRoleParamsSchema,
   deleteMenuItemParamsSchema,
   getMenuHistoryParamsSchema,
+  getMenuReleaseParamsSchema,
   getOrderByIdParamsSchema,
   healthResponseSchema,
   menuItemResponseSchema,
   menuItemHistoryResponseSchema,
+  menuReleaseListResponseSchema,
+  menuReleaseResponseSchema,
   menuListResponseSchema,
   nullableOrderResponseEnvelopeSchema,
   orderListResponseSchema,
@@ -395,6 +398,58 @@ app.get("/api/menu", () => ({ data: [...store.getMenu()] }), {
     200: menuListResponseSchema,
   },
 });
+
+app.get(
+  "/api/menu/releases",
+  async ({ request }) => {
+    await requireAnyRole(request, store, ["staff", "owner", "admin"]);
+    return { data: [...store.getMenuReleases()] };
+  },
+  {
+    detail: {
+      tags: ["menu"],
+      summary: "List complete menu releases",
+      description:
+        "Return every complete menu snapshot, newest first. Staff, owner, and admin only.",
+    },
+    response: {
+      200: menuReleaseListResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+    },
+  },
+);
+
+app.get(
+  "/api/menu/releases/:version",
+  async ({ params, request, set }) => {
+    await requireAnyRole(request, store, ["staff", "owner", "admin"]);
+    const input = getMenuReleaseParamsSchema.parse(params);
+    const release = store.getMenuRelease(parseInt(input.version, 10));
+
+    if (!release) {
+      set.status = 404;
+      return { error: "Menu release not found" };
+    }
+
+    return { data: release };
+  },
+  {
+    params: getMenuReleaseParamsSchema,
+    detail: {
+      tags: ["menu"],
+      summary: "Get one complete menu release",
+      description:
+        "Return the full menu from a specified version. Staff, owner, and admin only.",
+    },
+    response: {
+      200: menuReleaseResponseSchema,
+      401: apiErrorResponseSchema,
+      403: apiErrorResponseSchema,
+      404: apiErrorResponseSchema,
+    },
+  },
+);
 
 app.get(
   "/api/menu/:id/history",

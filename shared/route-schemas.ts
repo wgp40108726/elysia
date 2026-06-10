@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Order } from "./contracts.ts";
 import {
   currentUserSchema,
+  menuSnapshotSchema,
   menuItemVersionSchema,
   internalRoleSchema,
   menuItemSchema,
@@ -84,6 +85,11 @@ export const deleteMenuItemParamsSchema = z.object({
 /** GET /api/menu/:id/history */
 export const getMenuHistoryParamsSchema = z.object({
   id: z.string().regex(/^[0-9]+$/),
+});
+
+/** GET /api/menu/releases/:version */
+export const getMenuReleaseParamsSchema = z.object({
+  version: z.string().regex(/^[0-9]+$/),
 });
 
 /** GET /api/orders/:id */
@@ -181,6 +187,14 @@ export const menuItemResponseSchema = z.object({
 
 export const menuItemHistoryResponseSchema = z.object({
   data: z.array(menuItemVersionSchema),
+});
+
+export const menuReleaseListResponseSchema = z.object({
+  data: z.array(menuSnapshotSchema),
+});
+
+export const menuReleaseResponseSchema = z.object({
+  data: menuSnapshotSchema,
 });
 
 export const roleRequestResponseSchema = z.object({

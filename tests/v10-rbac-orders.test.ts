@@ -20,6 +20,23 @@ afterEach(async () => {
 });
 
 describe("V10 RBAC order flows", () => {
+  test("creates a complete menu release after every menu change", async () => {
+    const store = await createTestStore();
+
+    expect(store.getMenuReleases()).toHaveLength(1);
+    await store.updateMenuItem(1, { price: 45 });
+    await store.deleteMenuItem(2);
+
+    const releases = store.getMenuReleases();
+    expect(releases.map((release) => release.version)).toEqual([3, 2, 1]);
+    expect(
+      store.getMenuRelease(2)?.items.find((item) => item.id === 1)?.price,
+    ).toBe(45);
+    expect(
+      store.getMenuRelease(3)?.items.some((item) => item.id === 2),
+    ).toBe(false);
+  });
+
   test("records customer and creator for an on-behalf order", async () => {
     const store = await createTestStore();
     const order = await store.createOrder({

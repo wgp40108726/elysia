@@ -4,6 +4,7 @@ import type {
   InternalRole,
   MenuItem,
   MenuItemVersion,
+  MenuSnapshot,
   Order,
   OrderItem,
   OrderStatus,
@@ -24,11 +25,13 @@ interface DataStore {
   users: StoredUser[];
   menu: MenuItem[];
   menuVersions: MenuItemVersion[];
+  menuSnapshots: MenuSnapshot[];
   orders: Order[];
   roleRequests: RoleRequest[];
   userIdCounter: number;
   menuIdCounter: number;
   menuVersionIdCounter: number;
+  menuSnapshotIdCounter: number;
   orderIdCounter: number;
   roleRequestIdCounter: number;
 }
@@ -163,6 +166,16 @@ function createInitialMenuVersions(
   }));
 }
 
+function createInitialMenuSnapshot(menu: ReadonlyArray<MenuItem>): MenuSnapshot {
+  return {
+    id: 1,
+    version: 1,
+    action: "initial",
+    items: menu.map(toMenuSnapshot),
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function normalizeRoles(roles: unknown): Role[] {
   if (!Array.isArray(roles)) return ["customer"];
 
@@ -244,11 +257,13 @@ export class JsonFileStore implements Store {
   private users: StoredUser[] = [];
   private menu: MenuItem[] = [];
   private menuVersions: MenuItemVersion[] = [];
+  private menuSnapshots: MenuSnapshot[] = [];
   private orders: Order[] = [];
   private roleRequests: RoleRequest[] = [];
   private userIdCounter = 0;
   private menuIdCounter = 0;
   private menuVersionIdCounter = 0;
+  private menuSnapshotIdCounter = 0;
   private orderIdCounter = 0;
   private roleRequestIdCounter = 0;
   private persistQueue: Promise<void> = Promise.resolve();
@@ -285,11 +300,15 @@ export class JsonFileStore implements Store {
       const normalizedMenuVersions = Array.isArray(parsed.menuVersions)
         ? parsed.menuVersions.map((version) => normalizeMenuVersion(version))
         : createInitialMenuVersions(normalizedMenu);
+      const normalizedMenuSnapshots = Array.isArray(parsed.menuSnapshots)
+        ? parsed.menuSnapshots
+        : [createInitialMenuSnapshot(normalizedMenu)];
 
       this.applyStore({
         users: normalizedUsers,
         menu: normalizedMenu,
         menuVersions: normalizedMenuVersions,
+        menuSnapshots: normalizedMenuSnapshots,
         orders: parsed.orders.map((order) => ({
           ...order,
           userId: normalizeUserId(order.userId ?? fallbackUserId),
@@ -315,6 +334,7 @@ export class JsonFileStore implements Store {
         userIdCounter: parsed.userIdCounter ?? 0,
         menuIdCounter: parsed.menuIdCounter ?? 0,
         menuVersionIdCounter: parsed.menuVersionIdCounter ?? 0,
+        menuSnapshotIdCounter: parsed.menuSnapshotIdCounter ?? 0,
         orderIdCounter: parsed.orderIdCounter ?? 0,
         roleRequestIdCounter: parsed.roleRequestIdCounter ?? 0,
       });
@@ -336,6 +356,14 @@ export class JsonFileStore implements Store {
       .sort((a, b) => b.version - a.version);
   }
 
+  getMenuReleases(): ReadonlyArray<MenuSnapshot> {
+    return [...this.menuSnapshots].sort((a, b) => b.version - a.version);
+  }
+
+  getMenuRelease(version: number): MenuSnapshot | undefined {
+    return this.menuSnapshots.find((snapshot) => snapshot.version === version);
+  }
+
   async createMenuItem(input: {
     name: string;
     price: number;
@@ -354,6 +382,7 @@ export class JsonFileStore implements Store {
 
     this.menu.push(newMenuItem);
     this.recordMenuVersion(newMenuItem, "created");
+    this.recordMenuSnapshot("created", newMenuItem.id);
     await this.persist();
 
     return newMenuItem;
@@ -381,6 +410,7 @@ export class JsonFileStore implements Store {
     menuItem.image_url = patch.image_url ?? menuItem.image_url;
 
     this.recordMenuVersion(menuItem, "updated");
+    this.recordMenuSnapshot("updated", menuItem.id);
     await this.persist();
 
     return this.withPriceChangeHint(menuItem);
@@ -395,6 +425,7 @@ export class JsonFileStore implements Store {
     const [removedMenuItem] = this.menu.splice(targetIndex, 1);
     if (removedMenuItem) {
       this.recordMenuVersion(removedMenuItem, "deleted");
+      this.recordMenuSnapshot("deleted", removedMenuItem.id);
     }
     await this.persist();
 
@@ -695,11 +726,13 @@ export class JsonFileStore implements Store {
       users: cloneDefaultUsers(),
       menu: cloneDefaultMenu(),
       menuVersions: createInitialMenuVersions(cloneDefaultMenu()),
+      menuSnapshots: [createInitialMenuSnapshot(cloneDefaultMenu())],
       orders: [],
       roleRequests: [],
       userIdCounter: defaultUsers.length,
       menuIdCounter: defaultMenu.length,
       menuVersionIdCounter: defaultMenu.length,
+      menuSnapshotIdCounter: 1,
       orderIdCounter: 0,
       roleRequestIdCounter: 0,
     };
@@ -709,6 +742,7 @@ export class JsonFileStore implements Store {
     this.users = store.users;
     this.menu = store.menu;
     this.menuVersions = store.menuVersions;
+    this.menuSnapshots = store.menuSnapshots;
     this.orders = store.orders;
     this.roleRequests = store.roleRequests;
 
@@ -723,6 +757,10 @@ export class JsonFileStore implements Store {
     );
     const maxMenuVersionId = this.menuVersions.reduce(
       (max, version) => Math.max(max, version.id),
+      0,
+    );
+    const maxMenuSnapshotId = this.menuSnapshots.reduce(
+      (max, snapshot) => Math.max(max, snapshot.id),
       0,
     );
     const maxOrderId = this.orders.reduce(
@@ -740,6 +778,10 @@ export class JsonFileStore implements Store {
       store.menuVersionIdCounter || 0,
       maxMenuVersionId,
     );
+    this.menuSnapshotIdCounter = Math.max(
+      store.menuSnapshotIdCounter || 0,
+      maxMenuSnapshotId,
+    );
     this.orderIdCounter = Math.max(store.orderIdCounter || 0, maxOrderId);
     this.roleRequestIdCounter = Math.max(
       store.roleRequestIdCounter || 0,
@@ -752,11 +794,13 @@ export class JsonFileStore implements Store {
       users: this.users,
       menu: this.menu,
       menuVersions: this.menuVersions,
+      menuSnapshots: this.menuSnapshots,
       orders: this.orders,
       roleRequests: this.roleRequests,
       userIdCounter: this.userIdCounter,
       menuIdCounter: this.menuIdCounter,
       menuVersionIdCounter: this.menuVersionIdCounter,
+      menuSnapshotIdCounter: this.menuSnapshotIdCounter,
       orderIdCounter: this.orderIdCounter,
       roleRequestIdCounter: this.roleRequestIdCounter,
     };
@@ -777,6 +821,26 @@ export class JsonFileStore implements Store {
       action,
       snapshot: toMenuSnapshot(item),
       changedAt: new Date().toISOString(),
+    });
+  }
+
+  private recordMenuSnapshot(
+    action: Exclude<MenuSnapshot["action"], "initial">,
+    changedMenuItemId: number,
+  ): void {
+    const version =
+      this.menuSnapshots.reduce(
+        (max, snapshot) => Math.max(max, snapshot.version),
+        0,
+      ) + 1;
+
+    this.menuSnapshots.push({
+      id: ++this.menuSnapshotIdCounter,
+      version,
+      action,
+      changedMenuItemId,
+      items: this.menu.map(toMenuSnapshot),
+      createdAt: new Date().toISOString(),
     });
   }
 

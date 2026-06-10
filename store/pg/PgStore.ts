@@ -4,6 +4,7 @@ import type {
   InternalRole,
   MenuItem,
   MenuItemVersion,
+  MenuSnapshot,
   Order,
   OrderItem,
   OrderStatus,
@@ -14,6 +15,7 @@ import { db } from "../../db/client.ts";
 import {
   menuItemVersionsTable,
   menuItemsTable,
+  menuSnapshotsTable,
   orderItemsTable,
   ordersTable,
   roleRequestsTable,
@@ -49,6 +51,7 @@ export class PgStore implements Store {
   private readonly dataFilePath: string;
   private menu: MenuItem[] = [];
   private menuVersions: MenuItemVersion[] = [];
+  private menuSnapshots: MenuSnapshot[] = [];
   private orders: Order[] = [];
   private userRoles = new Map<string, Role[]>();
   private userNames = new Map<string, string>();
@@ -62,6 +65,7 @@ export class PgStore implements Store {
     await db.execute(sql`select 1`);
     await this.seedFromJsonIfEmpty();
     await this.ensureMenuVersions();
+    await this.ensureMenuSnapshots();
     await this.reloadFromDatabase();
   }
 
@@ -108,6 +112,7 @@ export class PgStore implements Store {
 
     this.menu.push(created);
     await this.recordMenuVersion(created, "created");
+    await this.recordMenuSnapshot("created", created.id);
     return this.withPriceChangeHint(created);
   }
 
@@ -150,7 +155,16 @@ export class PgStore implements Store {
     if (idx !== -1) this.menu[idx] = next;
 
     await this.recordMenuVersion(next, "updated");
+    await this.recordMenuSnapshot("updated", next.id);
     return this.withPriceChangeHint(next);
+  }
+
+  getMenuReleases(): ReadonlyArray<MenuSnapshot> {
+    return [...this.menuSnapshots].sort((a, b) => b.version - a.version);
+  }
+
+  getMenuRelease(version: number): MenuSnapshot | undefined {
+    return this.menuSnapshots.find((snapshot) => snapshot.version === version);
   }
 
   async deleteMenuItem(menuId: number): Promise<MenuItem | null> {
@@ -174,6 +188,7 @@ export class PgStore implements Store {
 
     const idx = this.menu.findIndex((item) => item.id === menuId);
     if (idx !== -1) this.menu.splice(idx, 1);
+    await this.recordMenuSnapshot("deleted", removedItem.id);
 
     return removedItem;
   }
@@ -601,6 +616,35 @@ export class PgStore implements Store {
     );
   }
 
+  private async ensureMenuSnapshots(): Promise<void> {
+    const [countRow] = await db
+      .select({ value: sql<number>`count(*)` })
+      .from(menuSnapshotsTable);
+
+    if (Number(countRow?.value ?? 0) > 0) return;
+
+    const menuRows = await db
+      .select()
+      .from(menuItemsTable)
+      .orderBy(asc(menuItemsTable.id));
+
+    const items: MenuItem[] = menuRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      price: row.price,
+      category: row.category,
+      description: row.description,
+      image_url: row.imageUrl,
+    }));
+
+    await db.insert(menuSnapshotsTable).values({
+      version: 1,
+      action: "initial",
+      items,
+      createdAt: new Date(),
+    });
+  }
+
   private async reloadFromDatabase(): Promise<void> {
     const menuRows = await db
       .select()
@@ -636,6 +680,10 @@ export class PgStore implements Store {
       .select()
       .from(menuItemVersionsTable)
       .orderBy(asc(menuItemVersionsTable.menuItemId), asc(menuItemVersionsTable.version));
+    const menuSnapshotRows = await db
+      .select()
+      .from(menuSnapshotsTable)
+      .orderBy(asc(menuSnapshotsTable.version));
 
     this.menu = menuRows.map((row) => ({
       id: row.id,
@@ -647,6 +695,7 @@ export class PgStore implements Store {
     }));
 
     this.menuVersions = menuVersionRows.map((row) => mapMenuVersionRow(row));
+    this.menuSnapshots = menuSnapshotRows.map((row) => mapMenuSnapshotRow(row));
 
     const itemsByOrderId = new Map<number, OrderItem[]>();
     for (const row of orderItemRows) {
@@ -723,6 +772,37 @@ export class PgStore implements Store {
     if (inserted) {
       this.menuVersions.push(mapMenuVersionRow(inserted));
     }
+  }
+
+  private async recordMenuSnapshot(
+    action: Exclude<MenuSnapshot["action"], "initial">,
+    changedMenuItemId: number,
+  ): Promise<void> {
+    const version =
+      this.menuSnapshots.reduce(
+        (max, snapshot) => Math.max(max, snapshot.version),
+        0,
+      ) + 1;
+
+    const [inserted] = await db
+      .insert(menuSnapshotsTable)
+      .values({
+        version,
+        action,
+        changedMenuItemId,
+        items: this.menu.map((item) => ({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          category: item.category,
+          description: item.description,
+          image_url: item.image_url,
+        })),
+        createdAt: new Date(),
+      })
+      .returning();
+
+    if (inserted) this.menuSnapshots.push(mapMenuSnapshotRow(inserted));
   }
 
   private withPriceChangeHint(item: MenuItem): MenuItem {
@@ -821,5 +901,25 @@ function mapMenuVersionRow(
       image_url: row.imageUrl,
     },
     changedAt: new Date(row.changedAt).toISOString(),
+  };
+}
+
+function mapMenuSnapshotRow(
+  row: typeof menuSnapshotsTable.$inferSelect,
+): MenuSnapshot {
+  const action =
+    row.action === "created" ||
+    row.action === "updated" ||
+    row.action === "deleted"
+      ? row.action
+      : "initial";
+
+  return {
+    id: row.id,
+    version: row.version,
+    action,
+    changedMenuItemId: row.changedMenuItemId ?? undefined,
+    items: row.items as MenuItem[],
+    createdAt: new Date(row.createdAt).toISOString(),
   };
 }

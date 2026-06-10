@@ -1,6 +1,7 @@
 import {
   boolean,
   integer,
+  jsonb,
   pgSchema,
   text,
   timestamp,
@@ -57,6 +58,23 @@ export const menuItemVersionsTable = appSchema.table(
       table.menuItemId,
       table.version,
     ),
+  }),
+);
+
+export const menuSnapshotsTable = appSchema.table(
+  "menu_snapshots",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    version: integer("version").notNull(),
+    action: text("action").notNull(),
+    changedMenuItemId: integer("changed_menu_item_id"),
+    items: jsonb("items").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    menuSnapshotVersionUniqueIdx: uniqueIndex(
+      "menu_snapshots_version_idx",
+    ).on(table.version),
   }),
 );
 

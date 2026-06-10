@@ -3,6 +3,7 @@ import type {
   InternalRole,
   MenuItem,
   MenuItemVersion,
+  MenuSnapshot,
   Order,
   OrderStatus,
   Role,
@@ -28,6 +29,8 @@ export interface Store {
 
   getMenu(): ReadonlyArray<MenuItem>;
   getMenuItemHistory(menuId: number): ReadonlyArray<MenuItemVersion>;
+  getMenuReleases(): ReadonlyArray<MenuSnapshot>;
+  getMenuRelease(version: number): MenuSnapshot | undefined;
   createMenuItem(input: {
     name: string;
     price: number;

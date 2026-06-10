@@ -50,6 +50,13 @@
       "when": 1780988634129,
       "tag": "0006_amused_giant_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781086945047,
+      "tag": "0007_thin_shockwave",
+      "breakpoints": true
     }
   ]
 }

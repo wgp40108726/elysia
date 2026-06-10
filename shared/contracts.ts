@@ -37,6 +37,29 @@ export const menuItemVersionSchema = z.object({
   changedAt: z.string().min(1),
 });
 
+export const menuSnapshotActionSchema = z.enum([
+  "initial",
+  "created",
+  "updated",
+  "deleted",
+]);
+
+export const menuSnapshotSchema = z.object({
+  id: z.number().int().min(1),
+  version: z.number().int().min(1),
+  action: menuSnapshotActionSchema,
+  changedMenuItemId: z.number().int().min(1).optional(),
+  items: z.array(
+    menuItemSchema.omit({
+      previousPrice: true,
+      priceDelta: true,
+      version: true,
+      lastChangedAt: true,
+    }),
+  ),
+  createdAt: z.string().min(1),
+});
+
 export const userSchema = z.object({
   id: z.string().min(1),
   email: z.string().min(3),
@@ -117,6 +140,8 @@ export const orderSchema = z.object({
 export type MenuItem = z.infer<typeof menuItemSchema>;
 export type MenuItemVersionAction = z.infer<typeof menuItemVersionActionSchema>;
 export type MenuItemVersion = z.infer<typeof menuItemVersionSchema>;
+export type MenuSnapshotAction = z.infer<typeof menuSnapshotActionSchema>;
+export type MenuSnapshot = z.infer<typeof menuSnapshotSchema>;
 export type User = z.infer<typeof userSchema>;
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 export type Role = z.infer<typeof roleSchema>;
