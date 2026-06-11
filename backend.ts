@@ -689,12 +689,13 @@ app.post(
       "admin",
     ]);
 
-    if (!(await store.userExists(input.customerId))) {
+    const customer = await store.findUserByEmail(input.customerEmail);
+    if (!customer) {
       set.status = 404;
       return { error: "Customer not found" };
     }
 
-    if (store.getCurrentOrderByUserId(input.customerId)) {
+    if (store.getCurrentOrderByUserId(customer.id)) {
       set.status = 409;
       return { error: "Customer already has a pending order" };
     }
@@ -706,7 +707,7 @@ app.post(
     }
 
     const order = await store.createOrder({
-      userId: input.customerId,
+      userId: customer.id,
       createdByUserId: creator.id,
       createdOnBehalf: true,
       reuseExisting: false,

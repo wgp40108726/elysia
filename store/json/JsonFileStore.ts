@@ -440,6 +440,23 @@ export class JsonFileStore implements Store {
     return this.users.some((user) => user.id === userId);
   }
 
+  async findUserByEmail(
+    email: string,
+  ): Promise<{ id: string; name: string; email: string } | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const matchedUser = this.users.find(
+      (user) => user.email.trim().toLowerCase() === normalizedEmail,
+    );
+
+    return matchedUser
+      ? {
+          id: matchedUser.id,
+          name: matchedUser.name,
+          email: matchedUser.email,
+        }
+      : null;
+  }
+
   async setUserRoles(
     userId: string,
     roles: ReadonlyArray<Role>,

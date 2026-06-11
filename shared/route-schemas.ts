@@ -109,7 +109,7 @@ export const updateOrderBodySchema = z.object({
 
 /** POST /api/orders/on-behalf */
 export const createOrderOnBehalfBodySchema = z.object({
-  customerId: z.string().min(1),
+  customerEmail: z.email(),
   items: z
     .array(
       z.object({

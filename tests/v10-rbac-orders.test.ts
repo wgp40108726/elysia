@@ -20,6 +20,19 @@ afterEach(async () => {
 });
 
 describe("V10 RBAC order flows", () => {
+  test("finds a customer by email without exposing database access", async () => {
+    const store = await createTestStore();
+
+    await expect(store.findUserByEmail("  AMY@EXAMPLE.COM ")).resolves.toEqual({
+      id: "0002",
+      name: "Amy",
+      email: "amy@example.com",
+    });
+    await expect(
+      store.findUserByEmail("missing@example.com"),
+    ).resolves.toBeNull();
+  });
+
   test("creates a complete menu release after every menu change", async () => {
     const store = await createTestStore();
 

@@ -52,6 +52,9 @@ export interface Store {
 
   getUserRoles(userId: string): ReadonlyArray<Role>;
   userExists(userId: string): Promise<boolean>;
+  findUserByEmail(
+    email: string,
+  ): Promise<{ id: string; name: string; email: string } | null>;
   setUserRoles(userId: string, roles: ReadonlyArray<Role>): Promise<Role[]>;
   deleteUserRole(userId: string, role: Role): Promise<Role[]>;
   createRoleRequest(input: {

@@ -50,7 +50,7 @@ export default function App() {
   const [roleRequestReason, setRoleRequestReason] = useState("");
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
-  const [assistedCustomerId, setAssistedCustomerId] = useState("");
+  const [assistedCustomerEmail, setAssistedCustomerEmail] = useState("");
   const [assistedItemId, setAssistedItemId] = useState("");
   const [assistedQty, setAssistedQty] = useState("1");
   const [editOrderId, setEditOrderId] = useState("");
@@ -602,7 +602,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          customerId: assistedCustomerId.trim(),
+          customerEmail: assistedCustomerEmail.trim().toLowerCase(),
           items: [
             {
               itemId: Number(assistedItemId),
@@ -629,7 +629,7 @@ export default function App() {
         createError instanceof Error &&
           createError.message === "Customer already has a pending order"
           ? "該顧客已有待編輯訂單，請直接協助修改。"
-          : "櫃台代建訂單失敗，請確認顧客與品項 ID。",
+          : "櫃台代建訂單失敗，請確認顧客 Email 與品項 ID。",
       );
       console.error(createError);
     }
@@ -1224,11 +1224,12 @@ export default function App() {
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <input
                             className="input input-bordered input-sm"
-                            value={assistedCustomerId}
+                            value={assistedCustomerEmail}
                             onChange={(event) => {
-                              setAssistedCustomerId(event.target.value);
+                              setAssistedCustomerEmail(event.target.value);
                             }}
-                            placeholder="顧客 user id"
+                            placeholder="顧客 Email"
+                            type="email"
                           />
                           <input
                             className="input input-bordered input-sm"
@@ -1251,7 +1252,7 @@ export default function App() {
                         </div>
                         <button
                           className="btn btn-primary btn-sm mt-2 w-full"
-                          disabled={!assistedCustomerId || !assistedItemId}
+                          disabled={!assistedCustomerEmail || !assistedItemId}
                           onClick={() => {
                             void createOrderOnBehalf();
                           }}

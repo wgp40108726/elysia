@@ -207,6 +207,21 @@ export class PgStore implements Store {
     return Boolean(row);
   }
 
+  async findUserByEmail(
+    email: string,
+  ): Promise<{ id: string; name: string; email: string } | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const [row] = await db
+      .select({ id: user.id, name: user.name, email: user.email })
+      .from(user)
+      .where(sql`lower(${user.email}) = ${normalizedEmail}`)
+      .limit(1);
+
+    if (!row) return null;
+    this.userNames.set(row.id, row.name);
+    return row;
+  }
+
   async setUserRoles(
     userId: string,
     roles: ReadonlyArray<Role>,
