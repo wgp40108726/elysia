@@ -8,6 +8,55 @@
       "when": 1777142977745,
       "tag": "0000_strange_runaways",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777458246949,
+      "tag": "0001_luxuriant_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777478305777,
+      "tag": "0002_unique_outlaw_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780550422522,
+      "tag": "0003_minor_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780551661818,
+      "tag": "0004_regular_songbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780886574527,
+      "tag": "0005_shocking_sumo",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780988634129,
+      "tag": "0006_amused_giant_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781086945047,
+      "tag": "0007_thin_shockwave",
+      "breakpoints": true
     }
   ]
 }

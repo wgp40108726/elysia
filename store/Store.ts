@@ -1,4 +1,14 @@
-import type { MenuItem, Order } from "../shared/contracts.ts";
+import type {
+  CurrentUser,
+  InternalRole,
+  MenuItem,
+  MenuItemVersion,
+  MenuSnapshot,
+  Order,
+  OrderStatus,
+  Role,
+  RoleRequest,
+} from "../shared/contracts.ts";
 
 export type UpdateOrderItemErrorCode =
   | "ORDER_NOT_FOUND"
@@ -12,10 +22,15 @@ export type SubmitOrderErrorCode =
   | "ORDER_NOT_EDITABLE"
   | "EMPTY_ORDER";
 
+export type UpdateOrderStatusErrorCode = "ORDER_NOT_FOUND";
+
 export interface Store {
   init(): Promise<void>;
 
   getMenu(): ReadonlyArray<MenuItem>;
+  getMenuItemHistory(menuId: number): ReadonlyArray<MenuItemVersion>;
+  getMenuReleases(): ReadonlyArray<MenuSnapshot>;
+  getMenuRelease(version: number): MenuSnapshot | undefined;
   createMenuItem(input: {
     name: string;
     price: number;
@@ -35,25 +50,58 @@ export interface Store {
   ): Promise<MenuItem | null>;
   deleteMenuItem(menuId: number): Promise<MenuItem | null>;
 
+  getUserRoles(userId: string): ReadonlyArray<Role>;
+  userExists(userId: string): Promise<boolean>;
+  findUserByEmail(
+    email: string,
+  ): Promise<{ id: string; name: string; email: string } | null>;
+  setUserRoles(userId: string, roles: ReadonlyArray<Role>): Promise<Role[]>;
+  deleteUserRole(userId: string, role: Role): Promise<Role[]>;
+  createRoleRequest(input: {
+    user: CurrentUser;
+    requestedRole: InternalRole;
+    reason: string;
+  }): Promise<RoleRequest>;
+  hasPendingRoleRequest(userId: string, requestedRole: InternalRole): boolean;
+  getRoleRequests(): ReadonlyArray<RoleRequest>;
+  getRoleRequestById(requestId: number): RoleRequest | undefined;
+  reviewRoleRequest(
+    requestId: number,
+    input: { action: "approve" | "reject"; reviewer: CurrentUser },
+  ): Promise<RoleRequest | null>;
+
   getOrders(): ReadonlyArray<Order>;
   getCurrentOrderByUserId(userId: string): Order | undefined;
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order>;
   getOrderById(orderId: number): Order | undefined;
-  createOrder(input: { userId: string }): Promise<Order>;
+  createOrder(input: {
+    userId: string;
+    createdByUserId?: string;
+    createdOnBehalf?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<Order>;
   updateOrderItem(
     orderId: number,
     input: {
       userId: string;
       itemId: number;
       qty: number;
+      canEditAnyOrder?: boolean;
     },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: UpdateOrderItemErrorCode }
   >;
   submitOrder(
     orderId: number,
-    input: { userId: string },
+    input: { userId: string; canSubmitAnyOrder?: boolean },
   ): Promise<
     { ok: true; order: Order } | { ok: false; code: SubmitOrderErrorCode }
+  >;
+  updateOrderStatus(
+    orderId: number,
+    input: { status: Exclude<OrderStatus, "pending"> },
+  ): Promise<
+    | { ok: true; order: Order }
+    | { ok: false; code: UpdateOrderStatusErrorCode }
   >;
 }

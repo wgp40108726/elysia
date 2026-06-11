@@ -11,13 +11,102 @@ export const menuItemSchema = z.object({
   category: z.string().min(1),
   description: z.string(),
   image_url: z.string().min(1),
+  previousPrice: z.number().min(0).optional(),
+  priceDelta: z.number().optional(),
+  version: z.number().int().min(1).optional(),
+  lastChangedAt: z.string().min(1).optional(),
 });
 
-export const sessionUserSchema = z.object({
+export const menuItemVersionActionSchema = z.enum([
+  "created",
+  "updated",
+  "deleted",
+]);
+
+export const menuItemVersionSchema = z.object({
+  id: z.number().int().min(1),
+  menuItemId: z.number().int().min(1),
+  version: z.number().int().min(1),
+  action: menuItemVersionActionSchema,
+  snapshot: menuItemSchema.omit({
+    previousPrice: true,
+    priceDelta: true,
+    version: true,
+    lastChangedAt: true,
+  }),
+  changedAt: z.string().min(1),
+});
+
+export const menuSnapshotActionSchema = z.enum([
+  "initial",
+  "created",
+  "updated",
+  "deleted",
+]);
+
+export const menuSnapshotSchema = z.object({
+  id: z.number().int().min(1),
+  version: z.number().int().min(1),
+  action: menuSnapshotActionSchema,
+  changedMenuItemId: z.number().int().min(1).optional(),
+  items: z.array(
+    menuItemSchema.omit({
+      previousPrice: true,
+      priceDelta: true,
+      version: true,
+      lastChangedAt: true,
+    }),
+  ),
+  createdAt: z.string().min(1),
+});
+
+export const userSchema = z.object({
   id: z.string().min(1),
   email: z.string().min(3),
   name: z.string().min(1),
-  // 注意：password 不在 API 業務層，只存在 DB 層（db/schema.ts）
+  password: z.string().min(1),
+  // 預留個資欄位（未來註冊/個資編輯流程會使用）
+  birthday: z.string().min(1).optional(),
+  address: z.string().min(1).optional(),
+});
+
+export const sessionUserSchema = userSchema.pick({
+  id: true,
+  email: true,
+  name: true,
+});
+
+export const roleSchema = z.enum([
+  "customer",
+  "staff",
+  "chef",
+  "owner",
+  "admin",
+]);
+
+export const internalRoleSchema = z.enum(["staff", "chef", "owner"]);
+
+export const currentUserSchema = sessionUserSchema.extend({
+  roles: z.array(roleSchema).min(1),
+});
+
+export const roleRequestStatusSchema = z.enum([
+  "pending",
+  "approved",
+  "rejected",
+]);
+
+export const roleRequestSchema = z.object({
+  id: z.number().int().min(1),
+  userId: z.string().min(1),
+  userName: z.string().min(1),
+  userEmail: z.string().min(3),
+  requestedRole: internalRoleSchema,
+  reason: z.string(),
+  status: roleRequestStatusSchema,
+  reviewedBy: z.string().min(1).optional(),
+  reviewedAt: z.string().min(1).optional(),
+  createdAt: z.string().min(1),
 });
 
 export const orderItemSchema = z.object({
@@ -25,33 +114,44 @@ export const orderItemSchema = z.object({
   qty: z.number().min(0),
 });
 
+export const orderStatusSchema = z.enum([
+  "pending",
+  "submitted",
+  "preparing",
+  "ready",
+  "completed",
+  "cancelled",
+]);
+
 export const orderSchema = z.object({
   id: z.number().int().min(1),
   userId: z.string().min(1),
+  customerName: z.string().min(1).optional(),
+  createdByUserId: z.string().min(1).optional(),
+  createdOnBehalf: z.boolean().default(false),
   items: z.array(orderItemSchema),
   total: z.number().min(0),
-  status: z.enum(["pending", "submitted"]),
+  status: orderStatusSchema,
   createdAt: z.string().min(1),
   submittedAt: z.string().min(1).optional(),
 });
 
-export const orderResponseSchema = orderSchema.extend({
-  createdAtTaipei: z.string().min(1),
-});
-
-export const apiErrorResponseSchema = z.object({
-  error: z.string(),
-  message: z.string().optional(),
-});
-
 // ─── Derived TypeScript Types（自動推導，永不過時）───────────────────────────
 export type MenuItem = z.infer<typeof menuItemSchema>;
+export type MenuItemVersionAction = z.infer<typeof menuItemVersionActionSchema>;
+export type MenuItemVersion = z.infer<typeof menuItemVersionSchema>;
+export type MenuSnapshotAction = z.infer<typeof menuSnapshotActionSchema>;
+export type MenuSnapshot = z.infer<typeof menuSnapshotSchema>;
+export type User = z.infer<typeof userSchema>;
 export type SessionUser = z.infer<typeof sessionUserSchema>;
-export type User = SessionUser; // 與 SessionUser 相同（API 層不含 password）
+export type Role = z.infer<typeof roleSchema>;
+export type InternalRole = z.infer<typeof internalRoleSchema>;
+export type CurrentUser = z.infer<typeof currentUserSchema>;
+export type RoleRequestStatus = z.infer<typeof roleRequestStatusSchema>;
+export type RoleRequest = z.infer<typeof roleRequestSchema>;
 export type OrderItem = z.infer<typeof orderItemSchema>;
+export type OrderStatus = z.infer<typeof orderStatusSchema>;
 export type Order = z.infer<typeof orderSchema>;
-export type OrderResponse = z.infer<typeof orderResponseSchema>;
-export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 
 export interface ApiDataResponse<T> {
   data: T;

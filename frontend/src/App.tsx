@@ -2,24 +2,34 @@ import { useEffect, useState, useMemo } from "react";
 import "./App.css";
 import type {
   ApiDataResponse,
+  CurrentUser,
+  InternalRole,
   MenuItem,
+  MenuItemVersion,
   Order,
-  SessionUser,
+  Role,
+  RoleRequest,
 } from "../../shared/contracts.ts";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const USER_STORAGE_KEY = "breakfast.user";
 
 function buildApiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
 }
 
+const orderStatusLabel: Record<Order["status"], string> = {
+  pending: "待送出",
+  submitted: "已送出",
+  preparing: "製作中",
+  ready: "可取餐",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
 export default function App() {
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [emailInput, setEmailInput] = useState("demo@example.com");
-  const [passwordInput, setPasswordInput] = useState("1234");
+  const [user, setUser] = useState<CurrentUser | null>(null);
   const [authError, setAuthError] = useState("");
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -35,6 +45,69 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [roleRequestRole, setRoleRequestRole] =
+    useState<InternalRole>("staff");
+  const [roleRequestReason, setRoleRequestReason] = useState("");
+  const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [assistedCustomerEmail, setAssistedCustomerEmail] = useState("");
+  const [menuNameQuery, setMenuNameQuery] = useState("");
+  const [assistedItemId, setAssistedItemId] = useState("");
+  const [assistedQty, setAssistedQty] = useState("1");
+  const [editOrderId, setEditOrderId] = useState("");
+  const [editOrderItemId, setEditOrderItemId] = useState("");
+  const [editOrderQty, setEditOrderQty] = useState("1");
+  const [menuHistory, setMenuHistory] = useState<MenuItemVersion[]>([]);
+  const [managementMessage, setManagementMessage] = useState("");
+  const [targetUserId, setTargetUserId] = useState("");
+  const [targetRoles, setTargetRoles] = useState("customer,staff");
+  const [menuDraft, setMenuDraft] = useState({
+    id: "",
+    name: "",
+    price: "",
+    category: "餐點",
+    description: "",
+    image_url: "/imgs/menu/test-v10.webp",
+  });
+
+  const canManageRoles = Boolean(user?.roles.includes("admin"));
+  const canReviewRequests = Boolean(
+    user?.roles.some((role) => role === "owner" || role === "admin"),
+  );
+  const canManageMenu = canReviewRequests;
+  const canManageOrders = Boolean(
+    user?.roles.some((role) =>
+      ["staff", "chef", "owner", "admin"].includes(role),
+    ),
+  );
+  const canAssistOrders = Boolean(
+    user?.roles.some((role) => ["staff", "owner", "admin"].includes(role)),
+  );
+
+  async function loadCurrentUser(): Promise<CurrentUser | null> {
+    const response = await fetch(buildApiUrl("/api/me"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      setUser(null);
+      return null;
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<CurrentUser>;
+    setUser(payload.data);
+    return payload.data;
+  }
+
+  async function loadMenuItems(): Promise<void> {
+    const response = await fetch(buildApiUrl("/api/menu"));
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<MenuItem[]>;
+    setItems(Array.isArray(payload?.data) ? payload.data : []);
+  }
 
   function syncCartFromOrder(order: Order) {
     const nextQtyByItemId = order.items.reduce(
@@ -53,12 +126,13 @@ export default function App() {
     setOrderId(null);
     setCartQtyByItemId({});
     setCartTotal(0);
+    setIsCartOpen(false);
   }
 
-  async function loadCurrentOrder(targetUserId: string): Promise<Order | null> {
-    const response = await fetch(
-      buildApiUrl(`/api/orders/current?userId=${targetUserId}`),
-    );
+  async function loadCurrentOrder(): Promise<Order | null> {
+    const response = await fetch(buildApiUrl("/api/orders/current"), {
+      credentials: "include",
+    });
 
     if (!response.ok) {
       throw new Error(`Load current order failed: HTTP ${response.status}`);
@@ -77,13 +151,13 @@ export default function App() {
     return currentOrder;
   }
 
-  async function loadOrderHistory(targetUserId: string): Promise<void> {
+  async function loadOrderHistory(): Promise<void> {
     setHistoryLoading(true);
 
     try {
-      const response = await fetch(
-        buildApiUrl(`/api/orders/history?userId=${targetUserId}`),
-      );
+      const response = await fetch(buildApiUrl("/api/orders/history"), {
+        credentials: "include",
+      });
 
       if (!response.ok) {
         throw new Error(`Load history failed: HTTP ${response.status}`);
@@ -96,48 +170,85 @@ export default function App() {
     }
   }
 
-  async function refreshUserOrders(targetUserId: string): Promise<void> {
-    await Promise.all([
-      loadCurrentOrder(targetUserId),
-      loadOrderHistory(targetUserId),
-    ]);
+  async function refreshUserOrders(): Promise<void> {
+    await Promise.all([loadCurrentOrder(), loadOrderHistory()]);
+  }
+
+  async function loadRoleRequests(): Promise<void> {
+    if (!canReviewRequests) {
+      setRoleRequests([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl("/api/role-requests"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load role requests failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<RoleRequest[]>;
+    setRoleRequests(Array.isArray(payload?.data) ? payload.data : []);
+  }
+
+  async function loadAllOrders(): Promise<void> {
+    if (!canManageOrders) {
+      setAllOrders([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl("/api/orders"), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load all orders failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<Order[]>;
+    setAllOrders(Array.isArray(payload?.data) ? payload.data : []);
+  }
+
+  async function loadMenuItemHistory(menuIdText = menuDraft.id): Promise<void> {
+    if (!menuIdText) {
+      setMenuHistory([]);
+      return;
+    }
+
+    const response = await fetch(buildApiUrl(`/api/menu/${menuIdText}/history`), {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Load menu history failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<
+      MenuItemVersion[]
+    >;
+    setMenuHistory(Array.isArray(payload?.data) ? payload.data : []);
   }
 
   useEffect(() => {
     let mounted = true;
 
-    const savedUser = window.localStorage.getItem(USER_STORAGE_KEY);
-    if (savedUser) {
+    // V10: 從 /api/me 恢復登入狀態與 RBAC roles。
+    async function restoreSession() {
       try {
-        const parsed = JSON.parse(savedUser) as SessionUser;
-        if (
-          typeof parsed?.id === "string" &&
-          parsed.id.trim() !== "" &&
-          typeof parsed?.email === "string" &&
-          typeof parsed?.name === "string"
-        ) {
-          setUser(parsed);
-        } else {
-          window.localStorage.removeItem(USER_STORAGE_KEY);
+        const currentUser = await loadCurrentUser();
+        if (!mounted || !currentUser) {
+          return;
         }
       } catch {
-        window.localStorage.removeItem(USER_STORAGE_KEY);
+        // session 無法取得，維持未登入狀態
       }
     }
+    void restoreSession();
 
     async function loadMenu() {
       try {
-        const response = await fetch(buildApiUrl("/api/menu"));
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const payload = (await response.json()) as ApiDataResponse<MenuItem[]>;
-        const fetchedItems = Array.isArray(payload?.data) ? payload.data : [];
-
-        if (mounted) {
-          setItems(fetchedItems);
-        }
+        await loadMenuItems();
       } catch (fetchError) {
         if (mounted) {
           setError("無法取得菜單資料，請稍後再試。");
@@ -160,15 +271,22 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setHistoryOrders([]);
+      setRoleRequests([]);
+      setAllOrders([]);
+      setIsCartOpen(false);
       resetCartState();
       return;
     }
 
-    void refreshUserOrders(user.id).catch((refreshError) => {
+    void Promise.all([
+      refreshUserOrders(),
+      loadRoleRequests(),
+      loadAllOrders(),
+    ]).catch((refreshError) => {
       setActionError("載入使用者訂單資料失敗，請稍後再試。");
       console.error(refreshError);
     });
-  }, [user]);
+  }, [user?.id, user?.roles.join(",")]);
 
   const grouped = useMemo(() => {
     const groupedItems = items.reduce(
@@ -194,6 +312,19 @@ export default function App() {
     () => Object.values(cartQtyByItemId).reduce((sum, qty) => sum + qty, 0),
     [cartQtyByItemId],
   );
+
+  const menuNameMatches = useMemo(() => {
+    const query = menuNameQuery.trim().toLocaleLowerCase("zh-TW");
+    if (!query) {
+      return [];
+    }
+
+    return items
+      .filter((item) =>
+        item.name.toLocaleLowerCase("zh-TW").includes(query),
+      )
+      .slice(0, 8);
+  }, [items, menuNameQuery]);
 
   const cartDetails = useMemo(() => {
     const itemById = new Map(items.map((item) => [item.id, item]));
@@ -228,12 +359,12 @@ export default function App() {
     const response = await fetch(buildApiUrl("/api/orders"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: user.id }),
+      credentials: "include",
+      body: JSON.stringify({}),
     });
 
     if (!response.ok) {
-      if ([401, 403, 404].includes(response.status)) {
-        window.localStorage.removeItem(USER_STORAGE_KEY);
+      if ([401, 403].includes(response.status)) {
         setUser(null);
         setAuthError("登入狀態已失效，請重新登入。");
         setActionError("登入狀態已失效，請重新登入。");
@@ -256,51 +387,380 @@ export default function App() {
     return createdOrderId;
   }
 
-  async function handleLogin(): Promise<void> {
+  async function handleGoogleSignIn(): Promise<void> {
     setAuthError("");
-    setActionError("");
-    setIsLoggingIn(true);
-
+    setIsGoogleSigningIn(true);
     try {
-      const response = await fetch(buildApiUrl("/api/auth/login"), {
+      // Better Auth 的 social sign-in 入口是 POST。
+      // 先向後端取得導向 Google 同意頁的 URL，再切換瀏覽器位置。
+      const callbackURL = window.location.origin;
+      const response = await fetch(buildApiUrl("/api/auth/sign-in/social"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: emailInput.trim(),
-          password: passwordInput,
-        }),
+        credentials: "include",
+        body: JSON.stringify({ provider: "google", callbackURL }),
       });
 
       if (!response.ok) {
-        throw new Error(`Login failed: HTTP ${response.status}`);
+        throw new Error(`Google sign-in failed: HTTP ${response.status}`);
       }
 
-      const payload = (await response.json()) as ApiDataResponse<SessionUser>;
-      const loggedInUser = payload?.data;
-
-      if (!loggedInUser) {
-        throw new Error("Login failed: invalid payload");
+      const payload = (await response.json()) as { url?: string };
+      if (!payload?.url) {
+        throw new Error("Google sign-in failed: missing redirect URL");
       }
 
-      setUser(loggedInUser);
-      window.localStorage.setItem(
-        USER_STORAGE_KEY,
-        JSON.stringify(loggedInUser),
-      );
-    } catch (loginError) {
-      setAuthError("登入失敗，請確認帳號與密碼。");
-      console.error(loginError);
-    } finally {
-      setIsLoggingIn(false);
+      window.location.href = payload.url;
+    } catch {
+      setAuthError("Google 登入啟動失敗，請稍後再試。");
+      setIsGoogleSigningIn(false);
     }
   }
 
-  function handleLogout() {
-    window.localStorage.removeItem(USER_STORAGE_KEY);
+  async function handleLogout(): Promise<void> {
+    // 使用 /api/sign-out（server-side proxy），避免 Better Auth CSRF 驗證
+    // 因 BETTER_AUTH_URL 設定錯誤造成的假登出（403 被吃掉）。
+    // 若登出失敗，顯示錯誤並中止，確保使用者知道 session 仍存在。
+    try {
+      const res = await fetch(buildApiUrl("/api/sign-out"), {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        setActionError(
+          `登出失敗（HTTP ${res.status}），請重試或手動清除瀏覽器 Cookie。`,
+        );
+        return;
+      }
+    } catch {
+      setActionError("登出時發生網路錯誤，請重試。");
+      return;
+    }
     setUser(null);
     setAuthError("");
     setActionError("");
     resetCartState();
+  }
+
+  async function submitRoleRequest(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/role-requests"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          requestedRole: roleRequestRole,
+          reason: roleRequestReason,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        if (response.status === 409) {
+          setActionError(
+            payload?.error === "User already has this role"
+              ? "你已經擁有這個角色。"
+              : "相同角色已有待審申請，請勿重複送出。",
+          );
+          return;
+        }
+        throw new Error(`Create role request failed: HTTP ${response.status}`);
+      }
+
+      setRoleRequestReason("");
+      setManagementMessage("角色申請已送出。");
+    } catch (requestError) {
+      setActionError("角色申請送出失敗。");
+      console.error(requestError);
+    }
+  }
+
+  async function reviewRoleRequest(
+    requestId: number,
+    action: "approve" | "reject",
+  ): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/role-requests/${requestId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Review role request failed: HTTP ${response.status}`);
+      }
+
+      await loadRoleRequests();
+      setManagementMessage(action === "approve" ? "已核准申請。" : "已拒絕申請。");
+    } catch (reviewError) {
+      setActionError("角色申請審核失敗。");
+      console.error(reviewError);
+    }
+  }
+
+  async function updateTargetUserRoles(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    const roles = targetRoles
+      .split(",")
+      .map((role) => role.trim())
+      .filter(Boolean) as Role[];
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/users/${targetUserId}/roles`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ roles }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Update user roles failed: HTTP ${response.status}`);
+      }
+
+      setManagementMessage("使用者角色已更新。");
+      if (targetUserId === user?.id) {
+        await loadCurrentUser();
+      }
+    } catch (roleError) {
+      setActionError("更新使用者角色失敗。");
+      console.error(roleError);
+    }
+  }
+
+  async function deleteTargetUserRole(role: Role): Promise<void> {
+    if (!targetUserId) return;
+
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/users/${targetUserId}/roles/${role}`),
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Delete user role failed: HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<{
+        userId: string;
+        roles: Role[];
+      }>;
+      setTargetRoles(payload.data.roles.join(","));
+      setManagementMessage(`${role} 角色已移除。`);
+      if (targetUserId === user?.id) {
+        await loadCurrentUser();
+      }
+    } catch (roleError) {
+      setActionError("刪除使用者角色失敗。");
+      console.error(roleError);
+    }
+  }
+
+  async function updateOrderStatus(
+    targetOrderId: number,
+    status: Order["status"],
+  ): Promise<void> {
+    if (status === "pending") return;
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/orders/${targetOrderId}/status`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ status }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Update order status failed: HTTP ${response.status}`);
+      }
+
+      await loadAllOrders();
+      setManagementMessage(`訂單 #${targetOrderId} 狀態已更新。`);
+    } catch (statusError) {
+      setActionError("更新訂單狀態失敗。");
+      console.error(statusError);
+    }
+  }
+
+  async function createOrderOnBehalf(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/orders/on-behalf"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          customerEmail: assistedCustomerEmail.trim().toLowerCase(),
+          items: [
+            {
+              itemId: Number(assistedItemId),
+              qty: Number(assistedQty),
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<Order>;
+      await loadAllOrders();
+      setAssistedItemId("");
+      setAssistedQty("1");
+      setManagementMessage(`已代建訂單 #${payload.data.id}。`);
+    } catch (createError) {
+      setActionError(
+        createError instanceof Error &&
+          createError.message === "Customer already has a pending order"
+          ? "該顧客已有待編輯訂單，請直接協助修改。"
+          : "櫃台代建訂單失敗，請確認顧客 Email 與品項 ID。",
+      );
+      console.error(createError);
+    }
+  }
+
+  async function updateCustomerOrderItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/orders/${editOrderId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            itemId: Number(editOrderItemId),
+            qty: Number(editOrderQty),
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      await loadAllOrders();
+      setManagementMessage(`訂單 #${editOrderId} 品項已更新。`);
+    } catch (updateError) {
+      setActionError("只能修改 pending 訂單，請確認訂單與品項 ID。");
+      console.error(updateError);
+    }
+  }
+
+  async function createMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl("/api/menu"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: menuDraft.name,
+          price: Number(menuDraft.price),
+          category: menuDraft.category,
+          description: menuDraft.description,
+          image_url: menuDraft.image_url,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      setManagementMessage("菜單品項已新增。");
+    } catch (menuError) {
+      setActionError("新增菜單失敗。");
+      console.error(menuError);
+    }
+  }
+
+  async function updateMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/menu/${menuDraft.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: menuDraft.name || undefined,
+          price: menuDraft.price ? Number(menuDraft.price) : undefined,
+          category: menuDraft.category || undefined,
+          description: menuDraft.description || undefined,
+          image_url: menuDraft.image_url || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Update menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      await loadMenuItemHistory(String(menuDraft.id));
+      setManagementMessage("菜單品項已更新。");
+    } catch (menuError) {
+      setActionError("更新菜單失敗。");
+      console.error(menuError);
+    }
+  }
+
+  async function deleteMenuItem(): Promise<void> {
+    setActionError("");
+    setManagementMessage("");
+
+    try {
+      const response = await fetch(buildApiUrl(`/api/menu/${menuDraft.id}`), {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Delete menu item failed: HTTP ${response.status}`);
+      }
+
+      await loadMenuItems();
+      await loadMenuItemHistory(String(menuDraft.id));
+      setManagementMessage("菜單品項已刪除。");
+    } catch (menuError) {
+      setActionError("刪除菜單失敗。");
+      console.error(menuError);
+    }
   }
 
   async function addToCart(item: MenuItem): Promise<void> {
@@ -321,8 +781,8 @@ export default function App() {
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
+            credentials: "include",
             body: JSON.stringify({
-              userId: user.id,
               itemId: item.id,
               qty,
             }),
@@ -361,7 +821,7 @@ export default function App() {
         ) {
           setOrderId(null);
 
-          const recoveredOrder = await loadCurrentOrder(user.id);
+          const recoveredOrder = await loadCurrentOrder();
           const retryOrderId = recoveredOrder?.id ?? (await ensureOrder());
           const recoveredQty =
             recoveredOrder?.items.find(
@@ -386,7 +846,7 @@ export default function App() {
 
       if (user) {
         try {
-          const recoveredOrder = await loadCurrentOrder(user.id);
+          const recoveredOrder = await loadCurrentOrder();
           const recoveredQty = recoveredOrder?.items.find(
             (orderItem) => orderItem.item.id === item.id,
           )?.qty;
@@ -419,8 +879,8 @@ export default function App() {
         const response = await fetch(buildApiUrl(`/api/orders/${orderId}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
-            userId: user.id,
             itemId: detail.itemId,
             qty: 0,
           }),
@@ -455,7 +915,8 @@ export default function App() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: user.id }),
+          credentials: "include",
+          body: JSON.stringify({}),
         },
       );
 
@@ -465,7 +926,7 @@ export default function App() {
 
       resetCartState();
       setIsCartOpen(false);
-      await loadOrderHistory(user.id);
+      await loadOrderHistory();
     } catch (submitError) {
       setActionError("送出訂單失敗，請稍後再試。");
       console.error(submitError);
@@ -503,6 +964,13 @@ export default function App() {
             <div className="badge badge-outline">
               {user ? `已登入 ${user.name}` : "尚未登入"}
             </div>
+            {user
+              ? user.roles.map((role) => (
+                  <div key={role} className="badge badge-neutral">
+                    {role}
+                  </div>
+                ))
+              : null}
             <div className="badge badge-primary">
               {items.length} 個品項・{grouped.categories.length} 類
             </div>
@@ -520,7 +988,12 @@ export default function App() {
               購物車明細
             </button>
             {user ? (
-              <button className="btn btn-sm" onClick={handleLogout}>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  void handleLogout();
+                }}
+              >
                 登出
               </button>
             ) : null}
@@ -532,44 +1005,23 @@ export default function App() {
         {!user ? (
           <section className="max-w-xl mx-auto card bg-base-100 shadow-md mb-8">
             <div className="card-body">
-              <h2 className="card-title">登入後開始點餐</h2>
+              <h2 className="card-title">使用 Google 帳號登入</h2>
               <p className="text-sm opacity-70">
-                範例帳號：demo@example.com、amy@example.com，密碼皆為 1234
+                點擊下方按鈕，使用您的 Google 帳號登入後即可開始點餐。
               </p>
-              <label className="form-control w-full">
-                <span className="label-text mb-1">Email</span>
-                <input
-                  className="input input-bordered"
-                  value={emailInput}
-                  onChange={(event) => {
-                    setEmailInput(event.target.value);
-                  }}
-                />
-              </label>
-              <label className="form-control w-full">
-                <span className="label-text mb-1">密碼</span>
-                <input
-                  type="password"
-                  className="input input-bordered"
-                  value={passwordInput}
-                  onChange={(event) => {
-                    setPasswordInput(event.target.value);
-                  }}
-                />
-              </label>
               {authError ? (
                 <div className="alert alert-error">
                   <span>{authError}</span>
                 </div>
               ) : null}
               <button
-                className="btn btn-primary"
+                className="btn btn-primary w-full"
                 onClick={() => {
-                  void handleLogin();
+                  void handleGoogleSignIn();
                 }}
-                disabled={isLoggingIn}
+                disabled={isGoogleSigningIn}
               >
-                {isLoggingIn ? "登入中..." : "登入"}
+                {isGoogleSigningIn ? "導向 Google 中..." : "使用 Google 登入"}
               </button>
             </div>
           </section>
@@ -579,6 +1031,574 @@ export default function App() {
           <div className="alert alert-warning mb-4">
             <span>{actionError}</span>
           </div>
+        ) : null}
+
+        {managementMessage ? (
+          <div className="alert alert-success mb-4">
+            <span>{managementMessage}</span>
+          </div>
+        ) : null}
+
+        {user ? (
+          <section className="mb-8 rounded-lg bg-base-100 border border-base-300 p-4">
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="text-xl font-bold">權限管理</h2>
+                  <p className="text-sm opacity-70">{user.email}</p>
+                </div>
+                <button
+                  className="btn btn-sm btn-outline"
+                  onClick={() => {
+                    void Promise.all([
+                      loadCurrentUser(),
+                      loadRoleRequests(),
+                      loadAllOrders(),
+                      loadMenuItems(),
+                    ]);
+                  }}
+                >
+                  重新整理
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div className="rounded-lg bg-base-200 p-4">
+                  <h3 className="font-semibold mb-3">角色申請</h3>
+                  <div className="space-y-3">
+                    <select
+                      className="select select-bordered w-full"
+                      value={roleRequestRole}
+                      onChange={(event) => {
+                        setRoleRequestRole(event.target.value as InternalRole);
+                      }}
+                    >
+                      <option
+                        value="staff"
+                        disabled={user.roles.includes("staff")}
+                      >
+                        staff 櫃台
+                      </option>
+                      <option
+                        value="chef"
+                        disabled={user.roles.includes("chef")}
+                      >
+                        chef 廚師
+                      </option>
+                      <option
+                        value="owner"
+                        disabled={user.roles.includes("owner")}
+                      >
+                        owner 店長
+                      </option>
+                    </select>
+                    <textarea
+                      className="textarea textarea-bordered w-full min-h-24"
+                      value={roleRequestReason}
+                      onChange={(event) => {
+                        setRoleRequestReason(event.target.value);
+                      }}
+                      placeholder="申請原因"
+                    />
+                    <button
+                      className="btn btn-primary w-full"
+                      disabled={user.roles.includes(roleRequestRole)}
+                      onClick={() => {
+                        void submitRoleRequest();
+                      }}
+                    >
+                      送出申請
+                    </button>
+                  </div>
+                </div>
+
+                {canReviewRequests ? (
+                  <div className="rounded-lg bg-base-200 p-4">
+                    <h3 className="font-semibold mb-3">申請審核</h3>
+                    {roleRequests.length === 0 ? (
+                      <div className="alert">
+                        <span>目前沒有申請。</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 max-h-80 overflow-auto">
+                        {roleRequests.map((request) => (
+                          <article
+                            key={request.id}
+                            className="rounded-lg bg-base-100 p-3 border border-base-300"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-semibold">
+                                #{request.id} {request.requestedRole}
+                              </p>
+                              <span className="badge">{request.status}</span>
+                            </div>
+                            <p className="text-sm opacity-70 truncate">
+                              {request.userEmail}
+                            </p>
+                            <p className="text-sm mt-2">{request.reason || "-"}</p>
+                            <div className="flex gap-2 mt-3">
+                              <button
+                                className="btn btn-xs btn-success"
+                                disabled={request.status !== "pending"}
+                                onClick={() => {
+                                  void reviewRoleRequest(request.id, "approve");
+                                }}
+                              >
+                                核准
+                              </button>
+                              <button
+                                className="btn btn-xs btn-error btn-outline"
+                                disabled={request.status !== "pending"}
+                                onClick={() => {
+                                  void reviewRoleRequest(request.id, "reject");
+                                }}
+                              >
+                                拒絕
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {canManageRoles ? (
+                  <div className="rounded-lg bg-base-200 p-4">
+                    <h3 className="font-semibold mb-3">使用者角色</h3>
+                    <div className="space-y-3">
+                      <input
+                        className="input input-bordered w-full"
+                        value={targetUserId}
+                        onChange={(event) => {
+                          setTargetUserId(event.target.value);
+                        }}
+                        placeholder="user id"
+                      />
+                      <input
+                        className="input input-bordered w-full"
+                        value={targetRoles}
+                        onChange={(event) => {
+                          setTargetRoles(event.target.value);
+                        }}
+                        placeholder="customer,staff,admin"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        {targetRoles
+                          .split(",")
+                          .map((role) => role.trim())
+                          .filter(Boolean)
+                          .map((role) => (
+                            <span key={role} className="badge badge-lg gap-2">
+                              {role}
+                              <button
+                                className="btn btn-ghost btn-xs px-1 min-h-0 h-5"
+                                type="button"
+                                disabled={!targetUserId}
+                                onClick={() => {
+                                  void deleteTargetUserRole(role as Role);
+                                }}
+                              >
+                                x
+                              </button>
+                            </span>
+                          ))}
+                      </div>
+                      <button
+                        className="btn btn-primary w-full"
+                        disabled={!targetUserId}
+                        onClick={() => {
+                          void updateTargetUserRoles();
+                        }}
+                      >
+                        更新角色
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {canManageOrders ? (
+                <div className="rounded-lg bg-base-200 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <h3 className="font-semibold">訂單狀態</h3>
+                    <button
+                      className="btn btn-xs btn-outline"
+                      onClick={() => {
+                        void loadAllOrders();
+                      }}
+                    >
+                      更新
+                    </button>
+                  </div>
+                  {canAssistOrders ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300 lg:col-span-2">
+                        <h4 className="font-semibold mb-2">餐品名稱查詢 ID</h4>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={menuNameQuery}
+                          onChange={(event) => {
+                            setMenuNameQuery(event.target.value);
+                          }}
+                          placeholder="輸入餐品名稱，例如：牛肉麵"
+                          aria-label="查詢餐品名稱"
+                        />
+                        {menuNameQuery.trim() ? (
+                          menuNameMatches.length > 0 ? (
+                            <div className="overflow-x-auto mt-2">
+                              <table className="table table-sm">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>餐品名稱</th>
+                                    <th>分類</th>
+                                    <th></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {menuNameMatches.map((item) => (
+                                    <tr key={item.id}>
+                                      <td>{item.id}</td>
+                                      <td>{item.name}</td>
+                                      <td>{item.category}</td>
+                                      <td className="text-right">
+                                        <button
+                                          className="btn btn-primary btn-xs"
+                                          onClick={() => {
+                                            setAssistedItemId(String(item.id));
+                                          }}
+                                        >
+                                          帶入代建
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-sm opacity-70 mt-2">
+                              找不到符合名稱的餐品。
+                            </p>
+                          )
+                        ) : null}
+                      </div>
+
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300">
+                        <h4 className="font-semibold mb-2">櫃台代建訂單</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedCustomerEmail}
+                            onChange={(event) => {
+                              setAssistedCustomerEmail(event.target.value);
+                            }}
+                            placeholder="顧客 Email"
+                            type="email"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedItemId}
+                            onChange={(event) => {
+                              setAssistedItemId(event.target.value);
+                            }}
+                            placeholder="品項 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={assistedQty}
+                            onChange={(event) => {
+                              setAssistedQty(event.target.value);
+                            }}
+                            placeholder="數量"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <button
+                          className="btn btn-primary btn-sm mt-2 w-full"
+                          disabled={!assistedCustomerEmail || !assistedItemId}
+                          onClick={() => {
+                            void createOrderOnBehalf();
+                          }}
+                        >
+                          代替顧客建立
+                        </button>
+                      </div>
+
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300">
+                        <h4 className="font-semibold mb-2">協助修改 pending 訂單</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderId}
+                            onChange={(event) => {
+                              setEditOrderId(event.target.value);
+                            }}
+                            placeholder="訂單 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderItemId}
+                            onChange={(event) => {
+                              setEditOrderItemId(event.target.value);
+                            }}
+                            placeholder="品項 id"
+                            inputMode="numeric"
+                          />
+                          <input
+                            className="input input-bordered input-sm"
+                            value={editOrderQty}
+                            onChange={(event) => {
+                              setEditOrderQty(event.target.value);
+                            }}
+                            placeholder="數量，0 為移除"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <button
+                          className="btn btn-secondary btn-sm mt-2 w-full"
+                          disabled={!editOrderId || !editOrderItemId}
+                          onClick={() => {
+                            void updateCustomerOrderItem();
+                          }}
+                        >
+                          更新顧客訂單
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {allOrders.length === 0 ? (
+                    <div className="alert">
+                      <span>目前沒有訂單。</span>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            {canAssistOrders ? <th>顧客</th> : null}
+                            <th>狀態</th>
+                            {canAssistOrders ? <th>金額</th> : null}
+                            <th>製作內容</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allOrders.map((order) => (
+                            <tr key={order.id}>
+                              <td>#{order.id}</td>
+                              {canAssistOrders ? (
+                                <td>
+                                  <div className="text-sm font-medium">
+                                    {order.customerName ?? "未知顧客"}
+                                  </div>
+                                  {order.createdOnBehalf ? (
+                                    <span className="badge badge-info badge-xs">
+                                      櫃台代建
+                                    </span>
+                                  ) : null}
+                                </td>
+                              ) : null}
+                              <td>
+                                <span className="badge badge-outline">
+                                  {orderStatusLabel[order.status]}
+                                </span>
+                              </td>
+                              {canAssistOrders ? <td>${order.total}</td> : null}
+                              <td>
+                                <ul className="text-xs space-y-1">
+                                  {order.items.map((detail) => (
+                                    <li key={`${order.id}-${detail.item.id}`}>
+                                      {detail.item.name} x {detail.qty}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </td>
+                              <td>
+                                <select
+                                  className="select select-bordered select-xs"
+                                  value={order.status}
+                                  onChange={(event) => {
+                                    void updateOrderStatus(
+                                      order.id,
+                                      event.target.value as Order["status"],
+                                    );
+                                  }}
+                                >
+                                  <option value="pending" disabled>
+                                    待送出
+                                  </option>
+                                  <option value="submitted">已送出</option>
+                                  <option value="preparing">製作中</option>
+                                  <option value="ready">可取餐</option>
+                                  <option value="completed">已完成</option>
+                                  <option value="cancelled">已取消</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {canManageMenu ? (
+                <div className="rounded-lg bg-base-200 p-4">
+                  <h3 className="font-semibold mb-3">菜單管理</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.id}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          id: event.target.value,
+                        }));
+                      }}
+                      placeholder="id"
+                    />
+                    <input
+                      className="input input-bordered md:col-span-2"
+                      value={menuDraft.name}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          name: event.target.value,
+                        }));
+                      }}
+                      placeholder="名稱"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.price}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          price: event.target.value,
+                        }));
+                      }}
+                      placeholder="價格"
+                      inputMode="numeric"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.category}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          category: event.target.value,
+                        }));
+                      }}
+                      placeholder="分類"
+                    />
+                    <input
+                      className="input input-bordered"
+                      value={menuDraft.image_url}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          image_url: event.target.value,
+                        }));
+                      }}
+                      placeholder="圖片"
+                    />
+                    <textarea
+                      className="textarea textarea-bordered md:col-span-6"
+                      value={menuDraft.description}
+                      onChange={(event) => {
+                        setMenuDraft((draft) => ({
+                          ...draft,
+                          description: event.target.value,
+                        }));
+                      }}
+                      placeholder="描述"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={
+                        !menuDraft.name ||
+                        !menuDraft.price ||
+                        !menuDraft.description
+                      }
+                      onClick={() => {
+                        void createMenuItem();
+                      }}
+                    >
+                      新增
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void updateMenuItem();
+                      }}
+                    >
+                      更新
+                    </button>
+                    <button
+                      className="btn btn-error btn-outline btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void deleteMenuItem();
+                      }}
+                    >
+                      刪除
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={!menuDraft.id}
+                      onClick={() => {
+                        void loadMenuItemHistory().catch((historyError) => {
+                          setActionError("讀取菜單版本歷史失敗。");
+                          console.error(historyError);
+                        });
+                      }}
+                    >
+                      版本歷史
+                    </button>
+                  </div>
+                  {menuHistory.length > 0 ? (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>版本</th>
+                            <th>動作</th>
+                            <th>名稱</th>
+                            <th>價格</th>
+                            <th>時間</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {menuHistory.map((version) => (
+                            <tr key={version.id}>
+                              <td>v{version.version}</td>
+                              <td>{version.action}</td>
+                              <td>{version.snapshot.name}</td>
+                              <td>${version.snapshot.price}</td>
+                              <td>
+                                {new Date(version.changedAt).toLocaleString(
+                                  "zh-TW",
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </section>
         ) : null}
 
         {items.length === 0 ? (
@@ -616,9 +1636,23 @@ export default function App() {
                         {item.description}
                       </p>
                       <div className="card-actions justify-between items-center">
-                        <span className="text-xl font-bold text-success">
-                          ${item.price}
-                        </span>
+                        <div>
+                          <span className="text-xl font-bold text-success">
+                            ${item.price}
+                          </span>
+                          {item.priceDelta ? (
+                            <div
+                              className={`badge badge-sm mt-1 ${
+                                item.priceDelta > 0
+                                  ? "badge-warning"
+                                  : "badge-info"
+                              }`}
+                            >
+                              {item.priceDelta > 0 ? "漲價" : "降價"} $
+                              {Math.abs(item.priceDelta)}
+                            </div>
+                          ) : null}
+                        </div>
                         <button
                           className="btn btn-sm btn-primary"
                           onClick={() => {
@@ -684,7 +1718,7 @@ export default function App() {
         ) : null}
       </main>
 
-      {isCartOpen ? (
+      {user && isCartOpen ? (
         <>
           <button
             className="fixed inset-0 bg-black/35"
