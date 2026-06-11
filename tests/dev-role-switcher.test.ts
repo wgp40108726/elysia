@@ -88,8 +88,35 @@ describe("development role switcher", () => {
     expect(isTrustedDevOrigin(request)).toBe(true);
   });
 
+  test("uses browser fetch metadata behind a reverse proxy", () => {
+    process.env.HOST = "0.0.0.0";
+    process.env.NODE_ENV = "production";
+
+    const sameSiteRequest = new Request(
+      "http://internal-render-host/api/dev/role-switcher",
+      {
+        headers: {
+          origin: "https://breakfast.onrender.com",
+          "sec-fetch-site": "same-origin",
+        },
+      },
+    );
+    const crossSiteRequest = new Request(
+      "http://internal-render-host/api/dev/role-switcher",
+      {
+        headers: {
+          origin: "https://evil.example.com",
+          "sec-fetch-site": "cross-site",
+        },
+      },
+    );
+
+    expect(isTrustedDevOrigin(sameSiteRequest)).toBe(true);
+    expect(isTrustedDevOrigin(crossSiteRequest)).toBe(false);
+  });
+
   test("reads a signed role override for the matching user", () => {
-    const cookie = createDevRoleCookie("user-1", "chef").split(";")[0];
+    const cookie = createDevRoleCookie("user-1", "chef").split(";")[0]!;
     const request = new Request("http://localhost:3000/api/me", {
       headers: { cookie },
     });
@@ -99,14 +126,14 @@ describe("development role switcher", () => {
   });
 
   test("rejects a modified cookie", () => {
-    const [nameAndValue] = createDevRoleCookie("user-1", "staff").split(";");
+    const nameAndValue = createDevRoleCookie("user-1", "staff").split(";")[0]!;
     const [name, value] = nameAndValue.split("=");
-    const [payload, signature] = value.split(".");
+    const [, signature] = value!.split(".");
     const tamperedPayload = Buffer.from(
       JSON.stringify({ userId: "user-1", role: "admin" }),
     ).toString("base64url");
     const request = new Request("http://localhost:3000/api/me", {
-      headers: { cookie: `${name}=${tamperedPayload}.${signature}` },
+      headers: { cookie: `${name!}=${tamperedPayload}.${signature!}` },
     });
 
     expect(getDevRoleOverride(request, "user-1")).toBeNull();

@@ -34,6 +34,7 @@
     "./*.ts",
     "./*.tsx",
     "./shared/**/*.ts",
+    "./tests/**/*.ts",
     "00_teaching/index_05.ts",
     "00_teaching/index_06.ts",
     "00_teaching/index_01.ts",
@@ -46,6 +47,9 @@
     "dist",
     "frontend",
     "auto-dev",
-    "breakfast-app-template"
+    "breakfast-app-template",
+    "backend_*.ts",
+    "backend.v7-*.ts",
+    "backend.ts.bak.*"
   ]
 }

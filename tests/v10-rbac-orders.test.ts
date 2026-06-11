@@ -150,7 +150,7 @@ describe("V10 RBAC order flows", () => {
       id: "0002",
       email: "amy@example.com",
       name: "Amy",
-      roles: ["customer"] as const,
+      roles: ["customer" as const],
     };
 
     await store.createRoleRequest({

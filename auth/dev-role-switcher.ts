@@ -44,6 +44,14 @@ export function canUseDevRoleSwitcher(
 }
 
 export function isTrustedDevOrigin(request: Request): boolean {
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (fetchSite === "same-origin" || fetchSite === "same-site") {
+    return true;
+  }
+  if (fetchSite === "cross-site") {
+    return false;
+  }
+
   const origin = request.headers.get("origin");
   if (!origin) return false;
 
@@ -56,9 +64,11 @@ export function isTrustedDevOrigin(request: Request): boolean {
     const requestOrigin = new URL(request.url).origin;
     const forwardedHost = request.headers.get("x-forwarded-host");
     const forwardedProto = request.headers.get("x-forwarded-proto");
+    const publicHost = forwardedHost?.split(",")[0]?.trim();
+    const publicProto = forwardedProto?.split(",")[0]?.trim();
     const forwardedOrigin =
-      forwardedHost && forwardedProto
-        ? `${forwardedProto.split(",")[0].trim()}://${forwardedHost.split(",")[0].trim()}`
+      publicHost && publicProto
+        ? `${publicProto}://${publicHost}`
         : undefined;
     const trustedOrigins = [
       requestOrigin,
