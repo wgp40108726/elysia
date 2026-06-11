@@ -51,6 +51,7 @@ export default function App() {
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [assistedCustomerEmail, setAssistedCustomerEmail] = useState("");
+  const [menuNameQuery, setMenuNameQuery] = useState("");
   const [assistedItemId, setAssistedItemId] = useState("");
   const [assistedQty, setAssistedQty] = useState("1");
   const [editOrderId, setEditOrderId] = useState("");
@@ -311,6 +312,19 @@ export default function App() {
     () => Object.values(cartQtyByItemId).reduce((sum, qty) => sum + qty, 0),
     [cartQtyByItemId],
   );
+
+  const menuNameMatches = useMemo(() => {
+    const query = menuNameQuery.trim().toLocaleLowerCase("zh-TW");
+    if (!query) {
+      return [];
+    }
+
+    return items
+      .filter((item) =>
+        item.name.toLocaleLowerCase("zh-TW").includes(query),
+      )
+      .slice(0, 8);
+  }, [items, menuNameQuery]);
 
   const cartDetails = useMemo(() => {
     const itemById = new Map(items.map((item) => [item.id, item]));
@@ -1219,6 +1233,58 @@ export default function App() {
                   </div>
                   {canAssistOrders ? (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+                      <div className="rounded-lg bg-base-100 p-3 border border-base-300 lg:col-span-2">
+                        <h4 className="font-semibold mb-2">餐品名稱查詢 ID</h4>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={menuNameQuery}
+                          onChange={(event) => {
+                            setMenuNameQuery(event.target.value);
+                          }}
+                          placeholder="輸入餐品名稱，例如：牛肉麵"
+                          aria-label="查詢餐品名稱"
+                        />
+                        {menuNameQuery.trim() ? (
+                          menuNameMatches.length > 0 ? (
+                            <div className="overflow-x-auto mt-2">
+                              <table className="table table-sm">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>餐品名稱</th>
+                                    <th>分類</th>
+                                    <th></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {menuNameMatches.map((item) => (
+                                    <tr key={item.id}>
+                                      <td>{item.id}</td>
+                                      <td>{item.name}</td>
+                                      <td>{item.category}</td>
+                                      <td className="text-right">
+                                        <button
+                                          className="btn btn-primary btn-xs"
+                                          onClick={() => {
+                                            setAssistedItemId(String(item.id));
+                                          }}
+                                        >
+                                          帶入代建
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-sm opacity-70 mt-2">
+                              找不到符合名稱的餐品。
+                            </p>
+                          )
+                        ) : null}
+                      </div>
+
                       <div className="rounded-lg bg-base-100 p-3 border border-base-300">
                         <h4 className="font-semibold mb-2">櫃台代建訂單</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
