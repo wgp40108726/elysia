@@ -15,15 +15,6 @@ function isLocalMode(): boolean {
   );
 }
 
-function getAllowedUserIds(): Set<string> {
-  return new Set(
-    (process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS ?? "")
-      .split(",")
-      .map((userId) => userId.trim())
-      .filter(Boolean),
-  );
-}
-
 function sign(payload: string): string {
   return createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
     .update(payload)
@@ -42,15 +33,14 @@ function readCookie(request: Request, name: string): string | null {
 }
 
 export function isDevRoleSwitcherEnabled(): boolean {
-  return (
-    process.env.ENABLE_DEV_ROLE_SWITCHER === "true" &&
-    (isLocalMode() || getAllowedUserIds().size > 0)
-  );
+  return process.env.ENABLE_DEV_ROLE_SWITCHER === "true";
 }
 
-export function canUseDevRoleSwitcher(userId: string): boolean {
+export function canUseDevRoleSwitcher(
+  actualRoles: ReadonlyArray<Role>,
+): boolean {
   if (!isDevRoleSwitcherEnabled()) return false;
-  return isLocalMode() || getAllowedUserIds().has(userId);
+  return isLocalMode() || actualRoles.includes("admin");
 }
 
 export function isTrustedDevOrigin(request: Request): boolean {
@@ -63,7 +53,9 @@ export function isTrustedDevOrigin(request: Request): boolean {
       return isLocalHostname(originUrl.hostname);
     }
 
+    const requestOrigin = new URL(request.url).origin;
     const trustedOrigins = [
+      requestOrigin,
       process.env.BETTER_AUTH_URL,
       process.env.API_ALLOWED_ORIGIN,
     ]
@@ -109,7 +101,7 @@ export function getDevRoleOverride(
   request: Request,
   expectedUserId: string,
 ): Role | null {
-  if (!canUseDevRoleSwitcher(expectedUserId)) return null;
+  if (!isDevRoleSwitcherEnabled()) return null;
 
   const cookie = readCookie(request, COOKIE_NAME);
   if (!cookie) return null;

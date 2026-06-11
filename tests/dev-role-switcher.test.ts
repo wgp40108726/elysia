@@ -12,7 +12,6 @@ const originalEnv = {
   host: process.env.HOST,
   nodeEnv: process.env.NODE_ENV,
   enabled: process.env.ENABLE_DEV_ROLE_SWITCHER,
-  allowedUserIds: process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS,
   betterAuthUrl: process.env.BETTER_AUTH_URL,
 };
 
@@ -21,7 +20,6 @@ beforeEach(() => {
   process.env.HOST = "localhost";
   process.env.NODE_ENV = "development";
   process.env.ENABLE_DEV_ROLE_SWITCHER = "true";
-  process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS = "";
   process.env.BETTER_AUTH_URL = "http://localhost:3000";
 });
 
@@ -30,7 +28,6 @@ afterEach(() => {
   process.env.HOST = originalEnv.host;
   process.env.NODE_ENV = originalEnv.nodeEnv;
   process.env.ENABLE_DEV_ROLE_SWITCHER = originalEnv.enabled;
-  process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS = originalEnv.allowedUserIds;
   process.env.BETTER_AUTH_URL = originalEnv.betterAuthUrl;
 });
 
@@ -39,24 +36,22 @@ describe("development role switcher", () => {
     expect(isDevRoleSwitcherEnabled()).toBe(true);
 
     process.env.HOST = "0.0.0.0";
-    expect(isDevRoleSwitcherEnabled()).toBe(false);
+    expect(isDevRoleSwitcherEnabled()).toBe(true);
   });
 
-  test("allows only configured user IDs in production", () => {
+  test("allows only actual admins in production", () => {
     process.env.HOST = "0.0.0.0";
     process.env.NODE_ENV = "production";
-    process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS = "allowed-1, allowed-2";
 
     expect(isDevRoleSwitcherEnabled()).toBe(true);
-    expect(canUseDevRoleSwitcher("allowed-1")).toBe(true);
-    expect(canUseDevRoleSwitcher("other-user")).toBe(false);
+    expect(canUseDevRoleSwitcher(["customer", "admin"])).toBe(true);
+    expect(canUseDevRoleSwitcher(["customer", "owner"])).toBe(false);
   });
 
   test("trusts the deployed application origin in production", () => {
     process.env.HOST = "0.0.0.0";
     process.env.NODE_ENV = "production";
-    process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS = "allowed-1";
-    process.env.BETTER_AUTH_URL = "https://breakfast.example.com";
+    process.env.BETTER_AUTH_URL = "https://different.example.com";
 
     const trustedRequest = new Request(
       "https://breakfast.example.com/api/dev/role-switcher",

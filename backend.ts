@@ -118,7 +118,7 @@ app.get("/api/dev/role-switcher", async ({ request, set }) => {
     return { error: "Unauthorized" };
   }
 
-  if (!canUseDevRoleSwitcher(user.id)) {
+  if (!canUseDevRoleSwitcher(store.getUserRoles(user.id))) {
     set.status = 404;
     return { error: "Not found" };
   }
@@ -143,7 +143,7 @@ app.post("/api/dev/role-switcher", async ({ body, request, set }) => {
     return { error: "Unauthorized" };
   }
 
-  if (!canUseDevRoleSwitcher(user.id)) {
+  if (!canUseDevRoleSwitcher(store.getUserRoles(user.id))) {
     set.status = 404;
     return { error: "Not found" };
   }
