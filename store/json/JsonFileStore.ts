@@ -643,9 +643,7 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "ORDER_NOT_OWNED" };
     }
 
-    const canEditSubmittedOrder =
-      order.status === "submitted" && input.canEditAnyOrder === true;
-    if (order.status !== "pending" && !canEditSubmittedOrder) {
+    if (!["pending", "submitted"].includes(order.status)) {
       return { ok: false, code: "ORDER_NOT_EDITABLE" };
     }
 

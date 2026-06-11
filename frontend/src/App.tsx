@@ -50,6 +50,10 @@ export default function App() {
   const [roleRequestReason, setRoleRequestReason] = useState("");
   const [roleRequests, setRoleRequests] = useState<RoleRequest[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [customerOrderItemDrafts, setCustomerOrderItemDrafts] = useState<
+    Record<number, { itemId: string; qty: string }>
+  >({});
+  const [activeCustomerOrderItem, setActiveCustomerOrderItem] = useState("");
   const [assistedCustomerEmail, setAssistedCustomerEmail] = useState("");
   const [menuNameQuery, setMenuNameQuery] = useState("");
   const [assistedItemId, setAssistedItemId] = useState("");
@@ -700,6 +704,50 @@ export default function App() {
     }
   }
 
+  async function updateOwnOrderItem(
+    targetOrderId: number,
+    itemId: number,
+    qty: number,
+  ): Promise<void> {
+    const actionKey = `${targetOrderId}-${itemId}`;
+    setActionError("");
+    setManagementMessage("");
+    setActiveCustomerOrderItem(actionKey);
+
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/orders/${targetOrderId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ itemId, qty }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ApiDataResponse<Order>;
+      setHistoryOrders((orders) =>
+        orders.map((order) =>
+          order.id === targetOrderId ? payload.data : order,
+        ),
+      );
+      setManagementMessage(`訂單 #${targetOrderId} 已更新。`);
+      if (canManageOrders) {
+        await loadAllOrders();
+      }
+    } catch (updateError) {
+      setActionError("訂單已進入製作階段，現在無法修改。");
+      await loadOrderHistory({ silent: true }).catch(() => undefined);
+      console.error(updateError);
+    } finally {
+      setActiveCustomerOrderItem("");
+    }
+  }
+
   async function createMenuItem(): Promise<void> {
     setActionError("");
     setManagementMessage("");
@@ -963,7 +1011,7 @@ export default function App() {
           <div>
             <h2 className="text-2xl font-bold">我的訂單</h2>
             <p className="text-sm opacity-70">
-              送出後會先進入待確認，店員仍可協助調整內容。
+              待確認期間你可以修改餐點與數量；開始製作後即會鎖定。
             </p>
           </div>
           <button
@@ -1001,13 +1049,134 @@ export default function App() {
                     建立時間：
                     {new Date(order.createdAt).toLocaleString("zh-TW")}
                   </p>
-                  <ul className="text-sm list-disc pl-5 space-y-1">
+                  <ul className="text-sm space-y-2">
                     {order.items.map((detail) => (
-                      <li key={`${order.id}-${detail.item.id}`}>
-                        {detail.item.name} x {detail.qty}
+                      <li
+                        key={`${order.id}-${detail.item.id}`}
+                        className="flex items-center justify-between gap-3 rounded-lg bg-base-200 p-2"
+                      >
+                        <span>
+                          {detail.item.name} x {detail.qty}
+                        </span>
+                        {order.status === "submitted" ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              className="btn btn-xs btn-outline"
+                              disabled={
+                                activeCustomerOrderItem ===
+                                `${order.id}-${detail.item.id}`
+                              }
+                              onClick={() => {
+                                void updateOwnOrderItem(
+                                  order.id,
+                                  detail.item.id,
+                                  Math.max(0, detail.qty - 1),
+                                );
+                              }}
+                            >
+                              −
+                            </button>
+                            <button
+                              className="btn btn-xs btn-outline"
+                              disabled={
+                                activeCustomerOrderItem ===
+                                `${order.id}-${detail.item.id}`
+                              }
+                              onClick={() => {
+                                void updateOwnOrderItem(
+                                  order.id,
+                                  detail.item.id,
+                                  detail.qty + 1,
+                                );
+                              }}
+                            >
+                              ＋
+                            </button>
+                            <button
+                              className="btn btn-xs btn-error btn-outline"
+                              disabled={
+                                activeCustomerOrderItem ===
+                                `${order.id}-${detail.item.id}`
+                              }
+                              onClick={() => {
+                                void updateOwnOrderItem(
+                                  order.id,
+                                  detail.item.id,
+                                  0,
+                                );
+                              }}
+                            >
+                              移除
+                            </button>
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
+                  {order.status === "submitted" ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_6rem_auto] gap-2">
+                      <select
+                        className="select select-bordered select-sm"
+                        value={customerOrderItemDrafts[order.id]?.itemId ?? ""}
+                        onChange={(event) => {
+                          setCustomerOrderItemDrafts((drafts) => ({
+                            ...drafts,
+                            [order.id]: {
+                              itemId: event.target.value,
+                              qty: drafts[order.id]?.qty ?? "1",
+                            },
+                          }));
+                        }}
+                      >
+                        <option value="">選擇要加入的餐點</option>
+                        {items
+                          .filter(
+                            (item) =>
+                              !order.items.some(
+                                (detail) => detail.item.id === item.id,
+                              ),
+                          )
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} ${item.price}
+                            </option>
+                          ))}
+                      </select>
+                      <input
+                        className="input input-bordered input-sm"
+                        type="number"
+                        min="1"
+                        value={customerOrderItemDrafts[order.id]?.qty ?? "1"}
+                        onChange={(event) => {
+                          setCustomerOrderItemDrafts((drafts) => ({
+                            ...drafts,
+                            [order.id]: {
+                              itemId: drafts[order.id]?.itemId ?? "",
+                              qty: event.target.value,
+                            },
+                          }));
+                        }}
+                      />
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        disabled={
+                          !customerOrderItemDrafts[order.id]?.itemId ||
+                          activeCustomerOrderItem !== ""
+                        }
+                        onClick={() => {
+                          const draft = customerOrderItemDrafts[order.id];
+                          if (!draft) return;
+                          void updateOwnOrderItem(
+                            order.id,
+                            Number(draft.itemId),
+                            Math.max(1, Number(draft.qty) || 1),
+                          );
+                        }}
+                      >
+                        加入訂單
+                      </button>
+                    </div>
+                  ) : null}
                   <p className="font-bold text-right">總額 ${order.total}</p>
                 </div>
               </article>

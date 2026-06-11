@@ -861,7 +861,7 @@ app.patch(
       tags: ["orders"],
       summary: "Update order item quantity",
       description:
-        "Customers may edit their cart; staff may also edit submitted orders while they await confirmation.",
+        "Customers may edit their own cart or submitted order while it awaits confirmation; staff may edit any order at those stages.",
     },
     response: {
       200: orderResponseEnvelopeSchema,

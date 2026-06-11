@@ -65,7 +65,7 @@ describe("V10 RBAC order flows", () => {
     expect(order.createdOnBehalf).toBe(true);
   });
 
-  test("staff can edit a submitted order while it is waiting for confirmation", async () => {
+  test("customer and staff can edit a submitted order while it awaits confirmation", async () => {
     const store = await createTestStore();
     const order = await store.createOrder({
       userId: "0002",
@@ -91,7 +91,17 @@ describe("V10 RBAC order flows", () => {
       itemId: 1,
       qty: 3,
     });
-    expect(customerEdit).toEqual({ ok: false, code: "ORDER_NOT_EDITABLE" });
+    expect(customerEdit.ok).toBe(true);
+
+    const otherCustomerEdit = await store.updateOrderItem(order.id, {
+      userId: "0003",
+      itemId: 1,
+      qty: 4,
+    });
+    expect(otherCustomerEdit).toEqual({
+      ok: false,
+      code: "ORDER_NOT_OWNED",
+    });
 
     const staffEdit = await store.updateOrderItem(order.id, {
       userId: "0001",
