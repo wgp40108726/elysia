@@ -44,6 +44,7 @@ import {
 import { createStore } from "./store/index.ts";
 import { auth, getCurrentUser } from "./auth/better-auth.ts";
 import {
+  canUseDevRoleSwitcher,
   clearDevRoleCookie,
   createDevRoleCookie,
   isDevRoleSwitcherEnabled,
@@ -105,8 +106,19 @@ app.use(
 app.get("/api/auth/*", ({ request }) => auth.handler(request));
 app.post("/api/auth/*", ({ request }) => auth.handler(request));
 
-app.get("/api/dev/role-switcher", ({ set }) => {
+app.get("/api/dev/role-switcher", async ({ request, set }) => {
   if (!isDevRoleSwitcherEnabled()) {
+    set.status = 404;
+    return { error: "Not found" };
+  }
+
+  const user = await getCurrentUser(request);
+  if (!user) {
+    set.status = 401;
+    return { error: "Unauthorized" };
+  }
+
+  if (!canUseDevRoleSwitcher(user.id)) {
     set.status = 404;
     return { error: "Not found" };
   }
@@ -129,6 +141,11 @@ app.post("/api/dev/role-switcher", async ({ body, request, set }) => {
   if (!user) {
     set.status = 401;
     return { error: "Unauthorized" };
+  }
+
+  if (!canUseDevRoleSwitcher(user.id)) {
+    set.status = 404;
+    return { error: "Not found" };
   }
 
   const parsedRole = roleSchema.safeParse(

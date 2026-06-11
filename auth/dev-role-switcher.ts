@@ -8,6 +8,22 @@ function isLocalHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
+function isLocalMode(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    isLocalHostname(process.env.HOST ?? "localhost")
+  );
+}
+
+function getAllowedUserIds(): Set<string> {
+  return new Set(
+    (process.env.DEV_ROLE_SWITCHER_ALLOWED_USER_IDS ?? "")
+      .split(",")
+      .map((userId) => userId.trim())
+      .filter(Boolean),
+  );
+}
+
 function sign(payload: string): string {
   return createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
     .update(payload)
@@ -28,9 +44,13 @@ function readCookie(request: Request, name: string): string | null {
 export function isDevRoleSwitcherEnabled(): boolean {
   return (
     process.env.ENABLE_DEV_ROLE_SWITCHER === "true" &&
-    process.env.NODE_ENV !== "production" &&
-    isLocalHostname(process.env.HOST ?? "localhost")
+    (isLocalMode() || getAllowedUserIds().size > 0)
   );
+}
+
+export function canUseDevRoleSwitcher(userId: string): boolean {
+  if (!isDevRoleSwitcherEnabled()) return false;
+  return isLocalMode() || getAllowedUserIds().has(userId);
 }
 
 export function isTrustedDevOrigin(request: Request): boolean {
@@ -38,7 +58,18 @@ export function isTrustedDevOrigin(request: Request): boolean {
   if (!origin) return false;
 
   try {
-    return isLocalHostname(new URL(origin).hostname);
+    const originUrl = new URL(origin);
+    if (isLocalMode()) {
+      return isLocalHostname(originUrl.hostname);
+    }
+
+    const trustedOrigins = [
+      process.env.BETTER_AUTH_URL,
+      process.env.API_ALLOWED_ORIGIN,
+    ]
+      .filter((value): value is string => Boolean(value && value !== "*"))
+      .map((value) => new URL(value).origin);
+    return trustedOrigins.includes(originUrl.origin);
   } catch {
     return false;
   }
@@ -48,13 +79,20 @@ export function createDevRoleCookie(userId: string, role: Role): string {
   const payload = Buffer.from(JSON.stringify({ userId, role })).toString(
     "base64url",
   );
-  return [
+  const attributes = [
     `${COOKIE_NAME}=${payload}.${sign(payload)}`,
     "HttpOnly",
     "SameSite=Lax",
     "Path=/",
     `Max-Age=${COOKIE_MAX_AGE_SECONDS}`,
-  ].join("; ");
+  ];
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.BETTER_AUTH_URL?.startsWith("https://")
+  ) {
+    attributes.push("Secure");
+  }
+  return attributes.join("; ");
 }
 
 export function clearDevRoleCookie(): string {
@@ -71,7 +109,7 @@ export function getDevRoleOverride(
   request: Request,
   expectedUserId: string,
 ): Role | null {
-  if (!isDevRoleSwitcherEnabled()) return null;
+  if (!canUseDevRoleSwitcher(expectedUserId)) return null;
 
   const cookie = readCookie(request, COOKIE_NAME);
   if (!cookie) return null;
