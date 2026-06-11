@@ -42,7 +42,14 @@ import {
   userRolesResponseSchema,
 } from "./shared/route-schemas.ts";
 import { createStore } from "./store/index.ts";
-import { auth } from "./auth/better-auth.ts";
+import { auth, getCurrentUser } from "./auth/better-auth.ts";
+import {
+  clearDevRoleCookie,
+  createDevRoleCookie,
+  isDevRoleSwitcherEnabled,
+  isTrustedDevOrigin,
+} from "./auth/dev-role-switcher.ts";
+import { roleSchema } from "./shared/contracts.ts";
 import {
   hasAnyRole,
   listPermissions,
@@ -97,6 +104,46 @@ app.use(
 // 必須在其他 API 路由之前定義，確保 Better Auth 路由優先匹配
 app.get("/api/auth/*", ({ request }) => auth.handler(request));
 app.post("/api/auth/*", ({ request }) => auth.handler(request));
+
+app.get("/api/dev/role-switcher", ({ set }) => {
+  if (!isDevRoleSwitcherEnabled()) {
+    set.status = 404;
+    return { error: "Not found" };
+  }
+
+  return { data: { enabled: true, roles: roleSchema.options } };
+});
+
+app.post("/api/dev/role-switcher", async ({ body, request, set }) => {
+  if (!isDevRoleSwitcherEnabled()) {
+    set.status = 404;
+    return { error: "Not found" };
+  }
+
+  if (!isTrustedDevOrigin(request)) {
+    set.status = 403;
+    return { error: "Forbidden" };
+  }
+
+  const user = await getCurrentUser(request);
+  if (!user) {
+    set.status = 401;
+    return { error: "Unauthorized" };
+  }
+
+  const parsedRole = roleSchema.safeParse(
+    typeof body === "object" && body !== null && "role" in body
+      ? body.role
+      : undefined,
+  );
+  if (!parsedRole.success) {
+    set.status = 400;
+    return { error: "Invalid role" };
+  }
+
+  set.headers["set-cookie"] = createDevRoleCookie(user.id, parsedRole.data);
+  return { data: { role: parsedRole.data } };
+});
 
 app.get(
   "/api/me",
@@ -205,7 +252,13 @@ app.post("/api/sign-out", async ({ request }) => {
       .catch(() => "(unreadable)");
     console.error(`[sign-out proxy] Better Auth returned ${res.status}:`, body);
   }
-  return res;
+  const headers = new Headers(res.headers);
+  headers.append("set-cookie", clearDevRoleCookie());
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
 });
 
 // RBAC 路由

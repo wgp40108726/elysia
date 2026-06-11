@@ -1,5 +1,6 @@
 import type { CurrentUser, Role, SessionUser } from "../shared/contracts.ts";
 import { getCurrentUser } from "./better-auth.ts";
+import { getDevRoleOverride } from "./dev-role-switcher.ts";
 import type { Store } from "../store/Store.ts";
 
 const permissionByRole: Record<Role, string[]> = {
@@ -82,7 +83,7 @@ export async function requireUser(
     });
   }
 
-  return attachRoles(sessionUser, store);
+  return attachRoles(request, sessionUser, store);
 }
 
 export async function requireAnyRole(
@@ -101,7 +102,19 @@ export async function requireAnyRole(
   return user;
 }
 
-function attachRoles(user: SessionUser, store: Store): CurrentUser {
+function attachRoles(
+  request: Request,
+  user: SessionUser,
+  store: Store,
+): CurrentUser {
+  const devRole = getDevRoleOverride(request, user.id);
+  if (devRole) {
+    return {
+      ...user,
+      roles: [devRole],
+    };
+  }
+
   const roles = store.getUserRoles(user.id);
   return {
     ...user,

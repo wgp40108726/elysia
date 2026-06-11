@@ -30,6 +30,9 @@ export default function App() {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [authError, setAuthError] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
+  const [isDevRoleSwitcherEnabled, setIsDevRoleSwitcherEnabled] =
+    useState(false);
+  const [isSwitchingDevRole, setIsSwitchingDevRole] = useState(false);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -101,6 +104,13 @@ export default function App() {
     const payload = (await response.json()) as ApiDataResponse<CurrentUser>;
     setUser(payload.data);
     return payload.data;
+  }
+
+  async function loadDevRoleSwitcherStatus(): Promise<void> {
+    const response = await fetch(buildApiUrl("/api/dev/role-switcher"), {
+      credentials: "include",
+    });
+    setIsDevRoleSwitcherEnabled(response.ok);
   }
 
   async function loadMenuItems(): Promise<void> {
@@ -253,6 +263,9 @@ export default function App() {
       }
     }
     void restoreSession();
+    void loadDevRoleSwitcherStatus().catch(() => {
+      setIsDevRoleSwitcherEnabled(false);
+    });
 
     async function loadMenu() {
       try {
@@ -465,6 +478,32 @@ export default function App() {
     setAuthError("");
     setActionError("");
     resetCartState();
+  }
+
+  async function switchDevRole(role: Role): Promise<void> {
+    setActionError("");
+    setIsSwitchingDevRole(true);
+
+    try {
+      const response = await fetch(buildApiUrl("/api/dev/role-switcher"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ role }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Switch role failed: HTTP ${response.status}`);
+      }
+
+      await loadCurrentUser();
+      setManagementMessage(`開發測試角色已切換為 ${role}。`);
+    } catch (switchError) {
+      setActionError("角色切換失敗，請確認已登入且開發切換器已啟用。");
+      console.error(switchError);
+    } finally {
+      setIsSwitchingDevRole(false);
+    }
   }
 
   async function submitRoleRequest(): Promise<void> {
@@ -1223,6 +1262,25 @@ export default function App() {
                   </div>
                 ))
               : null}
+            {user && isDevRoleSwitcherEnabled ? (
+              <label className="flex items-center gap-2">
+                <span className="badge badge-warning">DEV 角色</span>
+                <select
+                  className="select select-bordered select-sm"
+                  value={user.roles[0]}
+                  disabled={isSwitchingDevRole}
+                  onChange={(event) => {
+                    void switchDevRole(event.target.value as Role);
+                  }}
+                >
+                  <option value="customer">customer 顧客</option>
+                  <option value="staff">staff 櫃台</option>
+                  <option value="chef">chef 廚師</option>
+                  <option value="owner">owner 店長</option>
+                  <option value="admin">admin 管理員</option>
+                </select>
+              </label>
+            ) : null}
             <div className="badge badge-primary">
               {items.length} 個品項・{grouped.categories.length} 類
             </div>
