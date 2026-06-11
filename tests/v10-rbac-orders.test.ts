@@ -65,7 +65,7 @@ describe("V10 RBAC order flows", () => {
     expect(order.createdOnBehalf).toBe(true);
   });
 
-  test("staff can edit another customer's pending order but not a submitted one", async () => {
+  test("staff can edit a submitted order while it is waiting for confirmation", async () => {
     const store = await createTestStore();
     const order = await store.createOrder({
       userId: "0002",
@@ -86,13 +86,33 @@ describe("V10 RBAC order flows", () => {
       userId: "0001",
       canSubmitAnyOrder: true,
     });
-    const rejected = await store.updateOrderItem(order.id, {
+    const customerEdit = await store.updateOrderItem(order.id, {
+      userId: "0002",
+      itemId: 1,
+      qty: 3,
+    });
+    expect(customerEdit).toEqual({ ok: false, code: "ORDER_NOT_EDITABLE" });
+
+    const staffEdit = await store.updateOrderItem(order.id, {
       userId: "0001",
       itemId: 1,
       qty: 3,
       canEditAnyOrder: true,
     });
-    expect(rejected).toEqual({ ok: false, code: "ORDER_NOT_EDITABLE" });
+    expect(staffEdit.ok).toBe(true);
+
+    await store.updateOrderStatus(order.id, { status: "preparing" });
+    expect(store.getOrderHistoryByUserId("0002")).toHaveLength(1);
+    const preparingEdit = await store.updateOrderItem(order.id, {
+      userId: "0001",
+      itemId: 1,
+      qty: 4,
+      canEditAnyOrder: true,
+    });
+    expect(preparingEdit).toEqual({
+      ok: false,
+      code: "ORDER_NOT_EDITABLE",
+    });
   });
 
   test("chef response hides customer and creator identities", async () => {

@@ -640,7 +640,7 @@ app.get(
     detail: {
       tags: ["orders"],
       summary: "Get order history",
-      description: "Return submitted orders belonging to a user.",
+      description: "Return all non-cart orders belonging to a user.",
     },
     response: {
       200: orderListResponseSchema,
@@ -860,7 +860,8 @@ app.patch(
     detail: {
       tags: ["orders"],
       summary: "Update order item quantity",
-      description: "Set the quantity of a menu item within a pending order.",
+      description:
+        "Customers may edit their cart; staff may also edit submitted orders while they await confirmation.",
     },
     response: {
       200: orderResponseEnvelopeSchema,

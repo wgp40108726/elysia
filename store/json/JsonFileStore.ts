@@ -578,9 +578,7 @@ export class JsonFileStore implements Store {
 
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order> {
     return this.orders
-      .filter(
-        (order) => order.userId === userId && order.status === "submitted",
-      )
+      .filter((order) => order.userId === userId && order.status !== "pending")
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -645,7 +643,9 @@ export class JsonFileStore implements Store {
       return { ok: false, code: "ORDER_NOT_OWNED" };
     }
 
-    if (order.status !== "pending") {
+    const canEditSubmittedOrder =
+      order.status === "submitted" && input.canEditAnyOrder === true;
+    if (order.status !== "pending" && !canEditSubmittedOrder) {
       return { ok: false, code: "ORDER_NOT_EDITABLE" };
     }
 

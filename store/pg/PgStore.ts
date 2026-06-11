@@ -367,7 +367,7 @@ export class PgStore implements Store {
 
   getOrderHistoryByUserId(userId: string): ReadonlyArray<Order> {
     return this.orders
-      .filter((o) => o.userId === userId && o.status === "submitted")
+      .filter((o) => o.userId === userId && o.status !== "pending")
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -444,7 +444,9 @@ export class PgStore implements Store {
     if (!order) return { ok: false, code: "ORDER_NOT_FOUND" };
     if (order.userId !== input.userId && !input.canEditAnyOrder)
       return { ok: false, code: "ORDER_NOT_OWNED" };
-    if (order.status !== "pending")
+    const canEditSubmittedOrder =
+      order.status === "submitted" && input.canEditAnyOrder === true;
+    if (order.status !== "pending" && !canEditSubmittedOrder)
       return { ok: false, code: "ORDER_NOT_EDITABLE" };
 
     const menuItem = this.menu.find((item) => item.id === input.itemId);

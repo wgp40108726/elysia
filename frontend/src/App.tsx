@@ -19,7 +19,7 @@ function buildApiUrl(path: string) {
 
 const orderStatusLabel: Record<Order["status"], string> = {
   pending: "待送出",
-  submitted: "已送出",
+  submitted: "待確認",
   preparing: "製作中",
   ready: "可取餐",
   completed: "已完成",
@@ -151,8 +151,10 @@ export default function App() {
     return currentOrder;
   }
 
-  async function loadOrderHistory(): Promise<void> {
-    setHistoryLoading(true);
+  async function loadOrderHistory(options: { silent?: boolean } = {}): Promise<void> {
+    if (!options.silent) {
+      setHistoryLoading(true);
+    }
 
     try {
       const response = await fetch(buildApiUrl("/api/orders/history"), {
@@ -166,7 +168,9 @@ export default function App() {
       const payload = (await response.json()) as ApiDataResponse<Order[]>;
       setHistoryOrders(Array.isArray(payload?.data) ? payload.data : []);
     } finally {
-      setHistoryLoading(false);
+      if (!options.silent) {
+        setHistoryLoading(false);
+      }
     }
   }
 
@@ -287,6 +291,23 @@ export default function App() {
       console.error(refreshError);
     });
   }, [user?.id, user?.roles.join(",")]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const timer = window.setInterval(() => {
+      void Promise.all([
+        loadOrderHistory({ silent: true }),
+        canManageOrders ? loadAllOrders() : Promise.resolve(),
+      ]).catch((refreshError) => {
+        console.error("Order auto-refresh failed", refreshError);
+      });
+    }, 5000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [user?.id, user?.roles.join(","), canManageOrders]);
 
   const grouped = useMemo(() => {
     const groupedItems = items.reduce(
@@ -674,7 +695,7 @@ export default function App() {
       await loadAllOrders();
       setManagementMessage(`訂單 #${editOrderId} 品項已更新。`);
     } catch (updateError) {
-      setActionError("只能修改 pending 訂單，請確認訂單與品項 ID。");
+      setActionError("只能修改購物車或待確認訂單，請確認訂單與品項 ID。");
       console.error(updateError);
     }
   }
@@ -935,6 +956,68 @@ export default function App() {
     }
   }
 
+  function renderMyOrders() {
+    return (
+      <section className="mb-8 rounded-lg bg-base-100 border border-base-300 p-4">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-2xl font-bold">我的訂單</h2>
+            <p className="text-sm opacity-70">
+              送出後會先進入待確認，店員仍可協助調整內容。
+            </p>
+          </div>
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => {
+              void loadOrderHistory();
+            }}
+          >
+            重新整理
+          </button>
+        </div>
+        {historyLoading ? (
+          <div className="alert">
+            <span>讀取中...</span>
+          </div>
+        ) : historyOrders.length === 0 ? (
+          <div className="alert alert-info">
+            <span>目前尚無已送出的訂單。</span>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {historyOrders.map((order) => (
+              <article
+                key={order.id}
+                className="card bg-base-100 shadow-sm border border-base-300"
+              >
+                <div className="card-body p-4">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h3 className="font-semibold">訂單 #{order.id}</h3>
+                    <span className="badge badge-success">
+                      {orderStatusLabel[order.status]}
+                    </span>
+                  </div>
+                  <p className="text-sm opacity-70">
+                    建立時間：
+                    {new Date(order.createdAt).toLocaleString("zh-TW")}
+                  </p>
+                  <ul className="text-sm list-disc pl-5 space-y-1">
+                    {order.items.map((detail) => (
+                      <li key={`${order.id}-${detail.item.id}`}>
+                        {detail.item.name} x {detail.qty}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="font-bold text-right">總額 ${order.total}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -1038,6 +1121,8 @@ export default function App() {
             <span>{managementMessage}</span>
           </div>
         ) : null}
+
+        {user ? renderMyOrders() : null}
 
         {user ? (
           <section className="mb-8 rounded-lg bg-base-100 border border-base-300 p-4">
@@ -1328,7 +1413,9 @@ export default function App() {
                       </div>
 
                       <div className="rounded-lg bg-base-100 p-3 border border-base-300">
-                        <h4 className="font-semibold mb-2">協助修改 pending 訂單</h4>
+                        <h4 className="font-semibold mb-2">
+                          協助修改購物車／待確認訂單
+                        </h4>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <input
                             className="input input-bordered input-sm"
@@ -1419,25 +1506,46 @@ export default function App() {
                                 </ul>
                               </td>
                               <td>
-                                <select
-                                  className="select select-bordered select-xs"
-                                  value={order.status}
-                                  onChange={(event) => {
-                                    void updateOrderStatus(
-                                      order.id,
-                                      event.target.value as Order["status"],
-                                    );
-                                  }}
-                                >
-                                  <option value="pending" disabled>
-                                    待送出
-                                  </option>
-                                  <option value="submitted">已送出</option>
-                                  <option value="preparing">製作中</option>
-                                  <option value="ready">可取餐</option>
-                                  <option value="completed">已完成</option>
-                                  <option value="cancelled">已取消</option>
-                                </select>
+                                <div className="flex flex-col gap-1">
+                                  {canAssistOrders &&
+                                  ["pending", "submitted"].includes(
+                                    order.status,
+                                  ) ? (
+                                    <button
+                                      className="btn btn-secondary btn-xs"
+                                      onClick={() => {
+                                        setEditOrderId(String(order.id));
+                                        setEditOrderItemId(
+                                          String(order.items[0]?.item.id ?? ""),
+                                        );
+                                        setEditOrderQty(
+                                          String(order.items[0]?.qty ?? 1),
+                                        );
+                                      }}
+                                    >
+                                      修改品項
+                                    </button>
+                                  ) : null}
+                                  <select
+                                    className="select select-bordered select-xs"
+                                    value={order.status}
+                                    onChange={(event) => {
+                                      void updateOrderStatus(
+                                        order.id,
+                                        event.target.value as Order["status"],
+                                      );
+                                    }}
+                                  >
+                                    <option value="pending" disabled>
+                                      待送出
+                                    </option>
+                                    <option value="submitted">待確認</option>
+                                    <option value="preparing">製作中</option>
+                                    <option value="ready">可取餐</option>
+                                    <option value="completed">已完成</option>
+                                    <option value="cancelled">已取消</option>
+                                  </select>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -1673,49 +1781,6 @@ export default function App() {
           ))
         )}
 
-        {user ? (
-          <section className="mt-10">
-            <h2 className="text-2xl font-bold mb-4">我的訂單歷史</h2>
-            {historyLoading ? (
-              <div className="alert">
-                <span>讀取中...</span>
-              </div>
-            ) : historyOrders.length === 0 ? (
-              <div className="alert alert-info">
-                <span>目前尚無歷史訂單。</span>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {historyOrders.map((order) => (
-                  <article
-                    key={order.id}
-                    className="card bg-base-100 shadow-sm border border-base-300"
-                  >
-                    <div className="card-body p-4">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <h3 className="font-semibold">訂單 #{order.id}</h3>
-                        <span className="badge badge-success">已送出</span>
-                      </div>
-                      <p className="text-sm opacity-70">
-                        建立時間：{order.createdAt}
-                      </p>
-                      <ul className="text-sm list-disc pl-5 space-y-1">
-                        {order.items.map((detail) => (
-                          <li key={`${order.id}-${detail.item.id}`}>
-                            {detail.item.name} x {detail.qty}
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="font-bold text-right">
-                        總額 ${order.total}
-                      </p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        ) : null}
       </main>
 
       {user && isCartOpen ? (
