@@ -98,6 +98,7 @@ export default function App() {
 
     if (!response.ok) {
       setUser(null);
+      setIsDevRoleSwitcherEnabled(false);
       return null;
     }
 
@@ -106,11 +107,22 @@ export default function App() {
     return payload.data;
   }
 
-  async function loadDevRoleSwitcherStatus(): Promise<void> {
+  async function loadDevRoleSwitcherStatus(): Promise<boolean> {
     const response = await fetch(buildApiUrl("/api/dev/role-switcher"), {
       credentials: "include",
     });
-    setIsDevRoleSwitcherEnabled(response.ok);
+    if (!response.ok) {
+      setIsDevRoleSwitcherEnabled(false);
+      return false;
+    }
+
+    const payload = (await response.json()) as ApiDataResponse<{
+      enabled: boolean;
+      canUse: boolean;
+    }>;
+    const canUse = payload.data.enabled && payload.data.canUse;
+    setIsDevRoleSwitcherEnabled(canUse);
+    return canUse;
   }
 
   async function loadMenuItems(): Promise<void> {
@@ -258,14 +270,13 @@ export default function App() {
         if (!mounted || !currentUser) {
           return;
         }
+        await loadDevRoleSwitcherStatus();
       } catch {
         // session 無法取得，維持未登入狀態
+        setIsDevRoleSwitcherEnabled(false);
       }
     }
     void restoreSession();
-    void loadDevRoleSwitcherStatus().catch(() => {
-      setIsDevRoleSwitcherEnabled(false);
-    });
 
     async function loadMenu() {
       try {
@@ -475,6 +486,7 @@ export default function App() {
       return;
     }
     setUser(null);
+    setIsDevRoleSwitcherEnabled(false);
     setAuthError("");
     setActionError("");
     resetCartState();
@@ -493,13 +505,20 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`Switch role failed: HTTP ${response.status}`);
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(
+          `HTTP ${response.status}${payload?.error ? `: ${payload.error}` : ""}`,
+        );
       }
 
       await loadCurrentUser();
       setManagementMessage(`開發測試角色已切換為 ${role}。`);
     } catch (switchError) {
-      setActionError("角色切換失敗，請確認已登入且開發切換器已啟用。");
+      const detail =
+        switchError instanceof Error ? switchError.message : "未知錯誤";
+      setActionError(`角色切換失敗（${detail}）。`);
       console.error(switchError);
     } finally {
       setIsSwitchingDevRole(false);

@@ -123,7 +123,13 @@ app.get("/api/dev/role-switcher", async ({ request, set }) => {
     return { error: "Not found" };
   }
 
-  return { data: { enabled: true, roles: roleSchema.options } };
+  return {
+    data: {
+      enabled: true,
+      canUse: true,
+      roles: roleSchema.options,
+    },
+  };
 });
 
 app.post("/api/dev/role-switcher", async ({ body, request, set }) => {

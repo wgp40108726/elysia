@@ -40,7 +40,7 @@ export function canUseDevRoleSwitcher(
   actualRoles: ReadonlyArray<Role>,
 ): boolean {
   if (!isDevRoleSwitcherEnabled()) return false;
-  return isLocalMode() || actualRoles.includes("admin");
+  return actualRoles.includes("admin");
 }
 
 export function isTrustedDevOrigin(request: Request): boolean {
@@ -54,8 +54,15 @@ export function isTrustedDevOrigin(request: Request): boolean {
     }
 
     const requestOrigin = new URL(request.url).origin;
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const forwardedProto = request.headers.get("x-forwarded-proto");
+    const forwardedOrigin =
+      forwardedHost && forwardedProto
+        ? `${forwardedProto.split(",")[0].trim()}://${forwardedHost.split(",")[0].trim()}`
+        : undefined;
     const trustedOrigins = [
       requestOrigin,
+      forwardedOrigin,
       process.env.BETTER_AUTH_URL,
       process.env.API_ALLOWED_ORIGIN,
     ]

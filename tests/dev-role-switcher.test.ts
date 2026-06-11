@@ -39,7 +39,10 @@ describe("development role switcher", () => {
     expect(isDevRoleSwitcherEnabled()).toBe(true);
   });
 
-  test("allows only actual admins in production", () => {
+  test("allows only actual admins", () => {
+    expect(canUseDevRoleSwitcher(["customer", "admin"])).toBe(true);
+    expect(canUseDevRoleSwitcher(["customer", "owner"])).toBe(false);
+
     process.env.HOST = "0.0.0.0";
     process.env.NODE_ENV = "production";
 
@@ -64,6 +67,25 @@ describe("development role switcher", () => {
 
     expect(isTrustedDevOrigin(trustedRequest)).toBe(true);
     expect(isTrustedDevOrigin(untrustedRequest)).toBe(false);
+  });
+
+  test("trusts the public origin forwarded by Render", () => {
+    process.env.HOST = "0.0.0.0";
+    process.env.NODE_ENV = "production";
+    process.env.BETTER_AUTH_URL = "https://different.example.com";
+
+    const request = new Request(
+      "http://internal-render-host/api/dev/role-switcher",
+      {
+        headers: {
+          origin: "https://breakfast.onrender.com",
+          "x-forwarded-host": "breakfast.onrender.com",
+          "x-forwarded-proto": "https",
+        },
+      },
+    );
+
+    expect(isTrustedDevOrigin(request)).toBe(true);
   });
 
   test("reads a signed role override for the matching user", () => {
